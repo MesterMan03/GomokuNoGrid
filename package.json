@@ -1,0 +1,21 @@
+{
+  "name": "gomokunogrid",
+  "module": "src/index.html",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/kd-tree-javascript": "^1.0.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260223.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "kd-tree-javascript": "^1.0.3"
+  },
+  "scripts": {
+    "dev": "bun run src/index.html",
+    "build": "rm -rf dist && bun build src/index.html --outdir=dist --minify --sourcemap=external"
+  }
+}
