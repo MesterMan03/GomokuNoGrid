@@ -7,8 +7,7 @@ export const SCALE = 1000;
 export const MAX_PLACEMENT_DISTANCE = 6 * SYMBOL_RADIUS;
 
 export const PERPENDICULAR_TOLERANCE = 0.25 * SYMBOL_RADIUS * SCALE;
-export const WIN_D_MIN = 2 * SYMBOL_RADIUS * SCALE;
-export const WIN_D_MAX = 3 * SYMBOL_RADIUS * SCALE;
+export const WIN_D_MAX = Math.round(3.5 * SYMBOL_RADIUS * SCALE);
 export const WIN_SEARCH_RADIUS = 5 * WIN_D_MAX;
 export const WIN_ANGLE_STEP = Math.PI / 32;
 

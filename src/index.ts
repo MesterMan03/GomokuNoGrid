@@ -1,143 +1,5 @@
-import { kdTree } from "kd-tree-javascript";
-import {
-    EPSILON,
-    MAX_PLACEMENT_DISTANCE,
-    PERPENDICULAR_TOLERANCE, SCALE,
-    SYMBOL_RADIUS,
-    WIN_ANGLE_STEP, WIN_D_MAX,
-    WIN_D_MIN, WIN_SEARCH_RADIUS
-} from "./consts.ts";
-
-type Player = 0 | 1;
-
-interface Point {
-    x: number;
-    y: number;
-    player: Player;
-}
-
-function distance(a: Point, b: Point): number {
-    return (Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)) / SCALE;
-}
-
-export class Game {
-    private tree: kdTree<Point>;
-    points: Point[];
-
-    constructor() {
-        this.tree = new kdTree([], distance, ["x", "y"]);
-        this.points = [];
-    }
-
-    addMove(x: number, y: number, player: Player): boolean {
-        // scale up the coordinates for better precision in distance calculations
-        x = Math.round(x * SCALE);
-        y = Math.round(y * SCALE);
-
-        // rule 1: no overlapping moves
-        const nearest = this.tree.nearest({ x, y, player: 0 }, 1);
-        if(nearest.length > 0 && nearest[0]!![1] < SYMBOL_RADIUS * 2) {
-            console.log("Move rejected: too close to existing move");
-            return false;
-        }
-
-        // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
-        if(nearest.length > 0 && nearest[0]!![1] > MAX_PLACEMENT_DISTANCE) {
-            console.log("Move rejected: too far from existing moves");
-            return false;
-        }
-
-        this.tree.insert({ x, y, player });
-        // we use a separate array to keep track of points for easy access when needed
-        this.points.push({ x, y, player });
-        return true;
-    }
-
-    async checkWin(point: Point): Promise<boolean> {
-        const player = point.player;
-
-        // get nearby points for the same player
-        const nearby = this.tree.nearest(point, this.points.length, WIN_SEARCH_RADIUS).filter(p => p[0].player === player && (p[0].x !== point.x || p[0].y !== point.y));
-        if(nearby.length < 4) return false; // not enough points to win
-
-        const testedAngles = new Set<number>();
-
-        // for each nearby point, define a candidate direction
-        for(const [otherPoint] of nearby) {
-            const dx = otherPoint.x - point.x;
-            const dy = otherPoint.y - point.y;
-
-            const length = Math.sqrt(dx * dx + dy * dy);
-            if(length <= EPSILON) continue
-
-            const ux = dx / length;
-            const uy = dy / length;
-
-            // quantize angle
-            const angle = Math.atan2(uy, ux);
-            const bucket = Math.round(angle / WIN_ANGLE_STEP);
-
-            if(testedAngles.has(bucket)) continue; // already tested this direction
-            testedAngles.add(bucket);
-
-            // collect aligned points
-            const aligned = new Set<Point>();
-            aligned.add(point);
-
-            for(const [candidate] of nearby) {
-                const vx = candidate.x - point.x;
-                const vy = candidate.y - point.y;
-
-                // perpendicular distance using cross product
-                const perp = Math.abs(vx * uy - vy * ux);
-
-                if(perp <= PERPENDICULAR_TOLERANCE) aligned.add(candidate);
-                else console.debug("Rejected point for alignment:", candidate, "perpendicular distance:", perp);
-
-            }
-
-            console.debug("Aligned points:", Array.from(aligned));
-            if(aligned.size < 5) continue; // not enough aligned points
-
-            // project to 1d
-            const projections = new Array<number>();
-
-            for(const p of aligned) {
-                const tx = p.x - point.x;
-                const ty = p.y - point.y;
-
-                const t = tx * ux + ty * uy; // dot product
-                projections.push(t);
-            }
-
-            // sort projections in ascending order
-            projections.sort((a, b) => a - b);
-
-            console.debug("Projections:", projections);
-
-            // check spacing constraint
-            let consecutiveCount = 1;
-            for(let i = 0; i < projections.length - 1; i++) {
-                const nextProj = projections[i + 1];
-                const currentProj = projections[i];
-                console.debug("Checking projections:", currentProj, nextProj);
-                if(nextProj == null || currentProj == null) continue;
-
-                const delta = nextProj - currentProj;
-                if(WIN_D_MIN <= delta && delta <= WIN_D_MAX) {
-                    consecutiveCount++;
-                    console.debug("Valid spacing between projections:", currentProj, nextProj, "delta:", delta, "consecutiveCount:", consecutiveCount);
-                    if(consecutiveCount >= 5) return true; // win condition met
-                } else {
-                    console.debug("Invalid spacing between projections:", currentProj, nextProj, "delta:", delta, "resetting consecutive count");
-                    consecutiveCount = 1; // reset count if spacing is not valid
-                }
-            }
-        }
-
-        return false;
-    }
-}
+import {MAX_PLACEMENT_DISTANCE, SCALE, SYMBOL_RADIUS, WIN_D_MAX} from "./consts.ts";
+import {Game, GameState, type Player} from "./game.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -158,7 +20,46 @@ const scaleAmount = 1.05;
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 5;
 
+const mouse = { x: 0, y: 0 };
+
+const PAN_SPEED = 10;
+const activePanKeys = new Set<string>();
+
+const PAN_UP = new Set(["KeyW", "ArrowUp"]);
+const PAN_DOWN = new Set(["KeyS", "ArrowDown"]);
+const PAN_LEFT = new Set(["KeyA", "ArrowLeft"]);
+const PAN_RIGHT = new Set(["KeyD", "ArrowRight"]);
+
+function isAnyPressed(keys: Set<string>) {
+    for (const key of keys) {
+        if (activePanKeys.has(key)) return true;
+    }
+    return false;
+}
+
 function draw() {
+    const moveUp = isAnyPressed(PAN_UP);
+    const moveDown = isAnyPressed(PAN_DOWN);
+    const moveLeft = isAnyPressed(PAN_LEFT);
+    const moveRight = isAnyPressed(PAN_RIGHT);
+
+    let panX = 0;
+    let panY = 0;
+
+    if (moveUp) panY += PAN_SPEED;
+    if (moveDown) panY -= PAN_SPEED;
+    if (moveLeft) panX += PAN_SPEED;
+    if (moveRight) panX -= PAN_SPEED;
+
+    if (panX !== 0 && panY !== 0) {
+        const invDiag = 1 / Math.SQRT2;
+        panX *= invDiag;
+        panY *= invDiag;
+    }
+
+    translateX += panX;
+    translateY += panY;
+
     ctx.setTransform(scale, 0, 0, scale, translateX, translateY);
     ctx.clearRect(
         -translateX / scale,
@@ -174,16 +75,18 @@ function draw() {
         canvas.width / scale,
         canvas.height / scale);
 
+    const points = game.getPoints();
+
     // draw placement indicator
     indicatorCtx.fillStyle = "aqua";
-    for(const point of game.points) {
+    for(const point of points) {
         indicatorCtx.beginPath();
         indicatorCtx.arc(point.x / SCALE, point.y / SCALE, MAX_PLACEMENT_DISTANCE, 0, Math.PI * 2);
         indicatorCtx.fill();
     }
 
     indicatorCtx.fillStyle = "white";
-    for(const point of game.points) {
+    for(const point of points) {
         indicatorCtx.beginPath();
         indicatorCtx.arc(point.x / SCALE, point.y / SCALE, SYMBOL_RADIUS * 2, 0, Math.PI * 2);
         indicatorCtx.fill();
@@ -194,7 +97,7 @@ function draw() {
     ctx.globalAlpha = 1.0;
 
     // draw all points
-    for(const point of game.points) {
+    for(const point of points) {
         // for player 0, draw an x, for player 1, draw an arc
         if(point.player === 0) {
             ctx.strokeStyle = "black";
@@ -211,6 +114,55 @@ function draw() {
             ctx.stroke();
         }
     }
+
+    if(game.getState() === GameState.ONGOING) {
+        // draw a ghost indicator for the current player's potential move
+        const worldX = (mouse.x - translateX) / scale;
+        const worldY = (mouse.y - translateY) / scale;
+
+        if(currentPlayer === 0) {
+            ctx.strokeStyle = "black";
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(worldX - SYMBOL_RADIUS, worldY - SYMBOL_RADIUS);
+            ctx.lineTo(worldX + SYMBOL_RADIUS, worldY + SYMBOL_RADIUS);
+            ctx.moveTo(worldX + SYMBOL_RADIUS, worldY - SYMBOL_RADIUS);
+            ctx.lineTo(worldX - SYMBOL_RADIUS, worldY + SYMBOL_RADIUS);
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+        } else {
+            ctx.strokeStyle = "red";
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.arc(worldX, worldY, SYMBOL_RADIUS, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+        }
+
+        // draw a green line if the distance is below WIN_D_MAX and red otherwise
+        const closestPoint = game.getClosestPlayerPoint({ x: worldX * SCALE, y: worldY * SCALE, player: currentPlayer });
+        if(closestPoint) {
+            const dx = closestPoint.x / SCALE - worldX;
+            const dy = closestPoint.y / SCALE - worldY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            ctx.strokeStyle = (distance < WIN_D_MAX / SCALE) ? "green" : "red";
+            ctx.beginPath();
+            ctx.moveTo(worldX, worldY);
+            ctx.lineTo(closestPoint.x / SCALE, closestPoint.y / SCALE);
+            ctx.stroke();
+
+        }
+    } else {
+        // write a big text in the middle of the screen saying which player won
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.fillStyle = "black";
+        ctx.font = "48px sans-serif";
+        const text = game.getState() === GameState.WIN_0 ? "Player X wins!" : "Player O wins!";
+        const textWidth = ctx.measureText(text).width;
+        ctx.fillText(text, (canvas.width - textWidth) /2, canvas.height /2);
+    }
+
+    requestAnimationFrame(draw);
 }
 
 // ---------- ZOOM TO MOUSE ----------
@@ -229,36 +181,23 @@ canvas.addEventListener("wheel", (event) => {
     translateY = mouseY - (mouseY - translateY) * (newScale / scale);
 
     scale = newScale;
-
-    draw();
 });
 
 // ---------- ARROW KEY PANNING ----------
-const PAN_SPEED = 30;
-
 window.addEventListener("keydown", (event) => {
-    switch (event.key) {
-        case "W":
-        case "ArrowUp":
-            translateY += PAN_SPEED;
-            break;
-        case "S":
-        case "ArrowDown":
-            translateY -= PAN_SPEED;
-            break;
-        case "A":
-        case "ArrowLeft":
-            translateX += PAN_SPEED;
-            break;
-        case "D":
-        case "ArrowRight":
-            translateX -= PAN_SPEED;
-            break;
-        default:
-            return;
+    const code = event.code;
+    if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {
+        activePanKeys.add(code);
+        event.preventDefault();
     }
+});
 
-    draw();
+window.addEventListener("keyup", (event) => {
+    const code = event.code;
+    if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {
+        activePanKeys.delete(code);
+        event.preventDefault();
+    }
 });
 
 canvas.addEventListener("click", async (event) => {
@@ -269,16 +208,17 @@ canvas.addEventListener("click", async (event) => {
     const worldX = (screenX - translateX) / scale;
     const worldY = (screenY - translateY) / scale;
 
-    const valid = game.addMove(worldX, worldY, currentPlayer);
-    if(!valid) return; // if move is invalid, do not switch player or redraw
-    draw();
-
-    const lastPoint = game.points[game.points.length - 1];
-    if(lastPoint && await game.checkWin(lastPoint)) {
-        console.log(`Player ${currentPlayer} wins!`);
-    }
+    const move = game.addMove(worldX, worldY, currentPlayer);
+    if(!move) return; // if move is invalid, do not switch player
 
     currentPlayer = currentPlayer === 0 ? 1 : 0; // switch player
+});
+
+canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+
+    mouse.x = e.clientX - rect.left;
+    mouse.y = e.clientY - rect.top;
 });
 
 requestAnimationFrame(draw);
