@@ -181,6 +181,12 @@ function draw() {
         ctx.fillText(text, (canvas.width - textWidth) /2, canvas.height /2);
     }
 
+    // write the mouse x and y in the bottom left corner
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle = "black";
+    ctx.font = "16px monospace";
+    ctx.fillText(`Mouse: (${mouse.x}, ${mouse.y})`, 10, canvas.height - 10);
+
     requestAnimationFrame(draw);
 }
 
