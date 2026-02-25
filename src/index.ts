@@ -1,9 +1,15 @@
 import {MAX_PLACEMENT_DISTANCE, SCALE, SYMBOL_RADIUS, WIN_D_MAX} from "./consts.ts";
 import {Game, GameState, type Player} from "./game.ts";
+import type {AI} from "./ai/types.ts";
+import {EasyAI} from "./ai/easy.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
-const game = new Game();
+const modeSelect = document.getElementById("mode-select") as HTMLDivElement;
+
+let game = new Game();
+let ai: AI | null = null;
+let aiThinking = false;
 
 const indicatorCanvas = document.createElement("canvas");
 indicatorCanvas.width = canvas.width;
@@ -214,6 +220,8 @@ window.addEventListener("keyup", (event) => {
 });
 
 canvas.addEventListener("click", async (event) => {
+    if (aiThinking) return; // ignore clicks while AI is computing
+
     const rect = canvas.getBoundingClientRect();
     const screenX = event.clientX - rect.left;
     const screenY = event.clientY - rect.top;
@@ -225,6 +233,18 @@ canvas.addEventListener("click", async (event) => {
     if(!move) return; // if move is invalid, do not switch player
 
     currentPlayer = currentPlayer === 0 ? 1 : 0; // switch player
+
+    // if playing against AI and it's the AI's turn
+    if (ai && currentPlayer === 1 && game.getState() === GameState.ONGOING) {
+        aiThinking = true;
+        // small delay so the human can see their own move
+        setTimeout(() => {
+            const aiMove = ai!.getMove(game, 1);
+            game.addMove(aiMove.x, aiMove.y, 1);
+            currentPlayer = 0;
+            aiThinking = false;
+        }, 300);
+    }
 });
 
 canvas.addEventListener("mousemove", (e) => {
@@ -234,6 +254,25 @@ canvas.addEventListener("mousemove", (e) => {
     mouse.y = e.clientY - rect.top;
 });
 
-requestAnimationFrame(draw);
+// ---------- MODE SELECTION ----------
+modeSelect.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.tagName !== "BUTTON") return;
+    const mode = target.dataset["mode"];
+
+    if (mode === "pvp") {
+        ai = null;
+    } else if (mode === "easy") {
+        ai = new EasyAI();
+    } else {
+        return; // disabled modes
+    }
+
+    modeSelect.style.display = "none";
+    canvas.style.display = "block";
+    game = new Game();
+    currentPlayer = 0;
+    requestAnimationFrame(draw);
+});
 
 window.game = game;
