@@ -140,12 +140,15 @@ function draw() {
         }
 
         // draw a green line if the distance is below WIN_D_MAX and red otherwise
-        const closestPoint = game.getClosestPlayerPoint({ x: worldX * SCALE, y: worldY * SCALE, player: currentPlayer });
-        if(closestPoint) {
+        const closestPoints = game.getClosestPlayerPoint({ x: worldX * SCALE, y: worldY * SCALE, player: currentPlayer }, 3) ?? [];
+        for(const closestPoint of closestPoints) {
             const dx = closestPoint.x / SCALE - worldX;
             const dy = closestPoint.y / SCALE - worldY;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            ctx.strokeStyle = (distance < WIN_D_MAX / SCALE) ? "green" : "red";
+            if(distance > WIN_D_MAX / SCALE) {
+                continue;
+            }
+            ctx.strokeStyle = "green";
             ctx.beginPath();
             ctx.moveTo(worldX, worldY);
             ctx.lineTo(closestPoint.x / SCALE, closestPoint.y / SCALE);
@@ -153,6 +156,16 @@ function draw() {
 
         }
     } else {
+        // draw a line between the winning points
+        const winPoints = game.getWinPoints();
+        const point1 = winPoints[0]!;
+        const point2 = winPoints[1]!;
+        ctx.strokeStyle = "green";
+        ctx.beginPath();
+        ctx.moveTo(point1.x / SCALE, point1.y / SCALE);
+        ctx.lineTo(point2.x / SCALE, point2.y / SCALE);
+        ctx.stroke();
+
         // write a big text in the middle of the screen saying which player won
         ctx.setTransform(1,0,0,1,0,0);
         ctx.fillStyle = "black";

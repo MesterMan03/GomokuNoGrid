@@ -31,10 +31,11 @@ export enum GameState {
 }
 
 export class Game {
-    private tree0: kdTree<Point>;
-    private tree1: kdTree<Point>;
+    private readonly tree0: kdTree<Point>;
+    private readonly tree1: kdTree<Point>;
     private points: Point[];
     private state: GameState = GameState.ONGOING;
+    private winPoints: Point[] = [];
 
     constructor() {
         this.tree0 = new kdTree([], distance, ["x", "y"]);
@@ -51,6 +52,10 @@ export class Game {
         return this.state;
     }
 
+    getWinPoints(): Point[] {
+        return this.winPoints.slice();
+    }
+
     addMove(x: number, y: number, player: Player): Point | null {
         if(this.state !== GameState.ONGOING) {
             console.log("Move rejected: game already ended");
@@ -64,13 +69,18 @@ export class Game {
         // rule 1: no overlapping moves
         const point = { x, y, player } satisfies Point;
         const nearest = [this.tree0.nearest(point, 1), this.tree1.nearest(point, 1)].flat();
+        if(nearest.find(([_, dist]) => dist < SYMBOL_RADIUS * 2)) {
+            console.log("Move rejected: too close to existing move");
+            return null;
+        }
         if(nearest.length > 0 && nearest[0]!![1] < SYMBOL_RADIUS * 2) {
             console.log("Move rejected: too close to existing move");
             return null;
         }
 
         // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
-        if(nearest.length > 0 && nearest[0]!![1] > MAX_PLACEMENT_DISTANCE) {
+        const sortedDistances = nearest.map(([_, dist]) => dist).sort((a, b) => a - b);
+        if(sortedDistances.length > 0 && sortedDistances[0]! > MAX_PLACEMENT_DISTANCE) {
             console.log("Move rejected: too far from existing moves");
             return null;
         }
@@ -89,11 +99,11 @@ export class Game {
         return point;
     }
 
-    getClosestPlayerPoint(point: Point): Point | null {
+    getClosestPlayerPoint(point: Point, count: number = 1): Point[] | null {
         const tree = point.player === 0 ? this.tree0 : this.tree1;
-        const nearest = tree.nearest(point, 1);
+        const nearest = tree.nearest(point, count);
         if(nearest.length === 0) return null;
-        return nearest[0]!![0];
+        return nearest.map(([p, _]) => p);
     }
 
     checkWin(point: Point): boolean {
@@ -171,7 +181,17 @@ export class Game {
                 if(delta <= WIN_D_MAX) {
                     consecutiveCount++;
                     console.debug("Valid spacing between projections:", currentProj, nextProj, "delta:", delta, "consecutiveCount:", consecutiveCount);
-                    if(consecutiveCount >= 5) return true; // win condition met
+                    // win condition met
+                    if(consecutiveCount >= 5) {
+                        // set the first and last of the winning points for highlighting
+                        const sortedAligned = Array.from(aligned).sort((a, b) => {
+                            const ta = (a.x - point.x) * ux + (a.y - point.y) * uy;
+                            const tb = (b.x - point.x) * ux + (b.y - point.y) * uy;
+                            return ta - tb;
+                        });
+                        this.winPoints = [sortedAligned[0]!, sortedAligned[sortedAligned.length - 1]!];
+                        return true;
+                    }
                 } else {
                     console.debug("Invalid spacing between projections:", currentProj, nextProj, "delta:", delta, "resetting consecutive count");
                     consecutiveCount = 1; // reset count if spacing is not valid
