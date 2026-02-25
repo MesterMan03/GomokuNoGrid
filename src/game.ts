@@ -1,6 +1,7 @@
 import { kdTree } from "kd-tree-javascript";
 import {
     EPSILON,
+    LINE_GROUP_SEARCH_RADIUS,
     MAX_PLACEMENT_DISTANCE,
     PERPENDICULAR_TOLERANCE, SCALE,
     SYMBOL_RADIUS,
@@ -14,10 +15,20 @@ import {
  */
 export type Player = 0 | 1;
 
-interface Point {
+export interface Point {
     x: number;
     y: number;
     player: Player;
+}
+
+export interface LineGroup {
+    dirX: number;
+    dirY: number;
+    angleBucket: number;
+    originX: number;
+    originY: number;
+    projections: number[];
+    stones: Set<Point>;
 }
 
 function distance(a: Point, b: Point): number {
@@ -35,6 +46,8 @@ export class Game {
     private tree1: kdTree<Point>;
     private points: Point[];
     private state: GameState = GameState.ONGOING;
+    private lineGroups0: LineGroup[] = [];
+    private lineGroups1: LineGroup[] = [];
 
     constructor() {
         this.tree0 = new kdTree([], distance, ["x", "y"]);
@@ -79,6 +92,9 @@ export class Game {
         if(player === 0) this.tree0.insert(point);
         else this.tree1.insert(point);
         this.points.push(point);
+
+        // update line groups for the new stone
+        this.updateLineGroups(point);
 
         // check for win condition
         if(this.checkWin(point)) {
@@ -180,5 +196,98 @@ export class Game {
         }
 
         return false;
+    }
+
+    getPlayerPoints(player: Player): Point[] {
+        return this.points.filter(p => p.player === player);
+    }
+
+    getLineGroups(player: Player): LineGroup[] {
+        return player === 0 ? this.lineGroups0 : this.lineGroups1;
+    }
+
+    isValidMove(x: number, y: number): boolean {
+        if (this.state !== GameState.ONGOING) return false;
+
+        const sx = Math.round(x * SCALE);
+        const sy = Math.round(y * SCALE);
+        const point = { x: sx, y: sy, player: 0 as Player };
+
+        const nearest = [...this.tree0.nearest(point, 1), ...this.tree1.nearest(point, 1)]
+            .sort((a, b) => a[1] - b[1]);
+
+        if (nearest.length === 0) return true;
+        if (nearest[0]![1] < SYMBOL_RADIUS * 2) return false;
+        if (nearest[0]![1] > MAX_PLACEMENT_DISTANCE) return false;
+
+        return true;
+    }
+
+    private updateLineGroups(point: Point): void {
+        const player = point.player;
+        const tree = player === 0 ? this.tree0 : this.tree1;
+        const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
+
+        const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
+            .filter(([p]) => p !== point);
+
+        const addedToGroups = new Set<LineGroup>();
+
+        for (const [neighbor] of nearby) {
+            const dx = neighbor.x - point.x;
+            const dy = neighbor.y - point.y;
+            const len = Math.sqrt(dx * dx + dy * dy);
+            if (len <= EPSILON) continue;
+
+            let ux = dx / len;
+            let uy = dy / len;
+
+            // canonicalize direction to [0, π)
+            let angle = Math.atan2(uy, ux);
+            if (angle < 0) { angle += Math.PI; ux = -ux; uy = -uy; }
+            else if (angle >= Math.PI) { angle -= Math.PI; ux = -ux; uy = -uy; }
+            const bucket = Math.round(angle / WIN_ANGLE_STEP);
+
+            // try to find an existing group containing this neighbor with matching direction
+            let matched = false;
+            for (const group of groups) {
+                if (addedToGroups.has(group)) continue;
+                if (!group.stones.has(neighbor)) continue;
+                if (group.angleBucket !== bucket) continue;
+
+                // check perpendicular distance of point to group's line
+                const vx = point.x - group.originX;
+                const vy = point.y - group.originY;
+                const perp = Math.abs(vx * group.dirY - vy * group.dirX);
+                if (perp > PERPENDICULAR_TOLERANCE) continue;
+
+                // add point to group
+                group.stones.add(point);
+                const proj = vx * group.dirX + vy * group.dirY;
+                const idx = group.projections.findIndex(p => p > proj);
+                if (idx === -1) group.projections.push(proj);
+                else group.projections.splice(idx, 0, proj);
+
+                addedToGroups.add(group);
+                matched = true;
+                break;
+            }
+
+            if (!matched) {
+                // create new line group with point and neighbor
+                const proj = dx * ux + dy * uy;
+                const newGroup: LineGroup = {
+                    dirX: ux,
+                    dirY: uy,
+                    angleBucket: bucket,
+                    originX: point.x,
+                    originY: point.y,
+                    projections: [0, proj].sort((a, b) => a - b),
+                    stones: new Set([point, neighbor]),
+                };
+                groups.push(newGroup);
+                addedToGroups.add(newGroup);
+            }
+        }
     }
 }
