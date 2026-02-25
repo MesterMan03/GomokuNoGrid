@@ -245,8 +245,34 @@ canvas.addEventListener("click", async (event) => {
         aiThinking = true;
         // small delay so the human can see their own move
         setTimeout(() => {
-            const aiMove = ai!.getMove(game, 1);
-            game.addMove(aiMove.x, aiMove.y, 1);
+            const maxRetries = 5;
+            let moveAccepted = false;
+
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                const aiMove = ai!.getMove(game, 1);
+                if (game.addMove(aiMove.x, aiMove.y, 1)) {
+                    moveAccepted = true;
+                    break;
+                }
+            }
+
+            // if AI repeatedly failed, place a random valid move to prevent consecutive human turns
+            if (!moveAccepted) {
+                console.warn("AI failed to produce a valid move, placing random fallback.");
+                const points = game.getPoints();
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    const target = points[Math.floor(Math.random() * points.length)]!;
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 25 + Math.random() * 15;
+                    const fx = target.x / SCALE + Math.cos(angle) * dist;
+                    const fy = target.y / SCALE + Math.sin(angle) * dist;
+                    if (game.addMove(fx, fy, 1)) {
+                        moveAccepted = true;
+                        break;
+                    }
+                }
+            }
+
             currentPlayer = 0;
             aiThinking = false;
         }, 300);

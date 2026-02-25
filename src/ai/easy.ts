@@ -17,6 +17,10 @@ interface Candidate {
     threatSize: number;
 }
 
+function candidateKey(x: number, y: number): string {
+    return `${Math.round(x * SCALE)},${Math.round(y * SCALE)}`;
+}
+
 export class EasyAI implements AI {
     getMove(game: Game, player: Player): ScoredMove {
         const opponent: Player = player === 0 ? 1 : 0;
@@ -101,8 +105,8 @@ export class EasyAI implements AI {
             const ext2X = (group.originX + group.dirX * (maxProj + spacing)) / SCALE;
             const ext2Y = (group.originY + group.dirY * (maxProj + spacing)) / SCALE;
 
-            const key1 = `${Math.round(ext1X)},${Math.round(ext1Y)}`;
-            const key2 = `${Math.round(ext2X)},${Math.round(ext2Y)}`;
+            const key1 = candidateKey(ext1X, ext1Y);
+            const key2 = candidateKey(ext2X, ext2Y);
 
             // only set if no higher-priority candidate exists at this position
             if (!candidates.has(key1) || candidates.get(key1)!.reason === MoveReason.NEARBY_RANDOM) {
@@ -129,8 +133,8 @@ export class EasyAI implements AI {
 
             const reason = group.stones.size >= 4 ? MoveReason.CRITICAL_BLOCK : MoveReason.DEFENSIVE_BLOCK;
 
-            const key1 = `${Math.round(ext1X)},${Math.round(ext1Y)}`;
-            const key2 = `${Math.round(ext2X)},${Math.round(ext2Y)}`;
+            const key1 = candidateKey(ext1X, ext1Y);
+            const key2 = candidateKey(ext2X, ext2Y);
 
             // blocking moves always override lower-priority candidates
             const existing1 = candidates.get(key1);
@@ -162,7 +166,7 @@ export class EasyAI implements AI {
                 const dist = IDEAL_SPACING + (Math.random() - 0.5) * 10;
                 const x = stone.x / SCALE + Math.cos(angle) * dist;
                 const y = stone.y / SCALE + Math.sin(angle) * dist;
-                const key = `${Math.round(x)},${Math.round(y)}`;
+                const key = candidateKey(x, y);
                 // never overwrite a higher-priority candidate
                 if (!candidates.has(key)) {
                     candidates.set(key, { x, y, reason: MoveReason.NEARBY_RANDOM, threatSize: 0 });
