@@ -22,6 +22,29 @@ export interface ScoredMove {
     reason: MoveReason;
 }
 
+export interface DebugMarker {
+    x: number;
+    y: number;
+    color: string;
+    label?: string;
+    radius?: number;
+}
+
+export interface DebugLine {
+    x1: number; y1: number;
+    x2: number; y2: number;
+    color: string;
+    dashed?: boolean;
+}
+
+export interface DebugPhase {
+    title: string;
+    description: string;
+    markers: DebugMarker[];
+    lines: DebugLine[];
+}
+
 export interface AI {
-    getMove(game: Game, player: Player): ScoredMove;
+    getMove(game: Game, player: Player): Promise<ScoredMove>;
+    getLastDebugPhases?(): DebugPhase[];
 }

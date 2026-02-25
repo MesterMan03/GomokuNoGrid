@@ -3,6 +3,7 @@ import {Game, GameState, type Player} from "./game.ts";
 import type {AI} from "./ai/types.ts";
 import {EasyAI} from "./ai/easy.ts";
 import {MediumAI} from "./ai/medium.ts";
+import {DebugDrawer} from "./debug.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -11,6 +12,7 @@ const modeSelect = document.getElementById("mode-select") as HTMLDivElement;
 let game = new Game();
 let ai: AI | null = null;
 let aiThinking = false;
+const debugDrawer = new DebugDrawer();
 
 const indicatorCanvas = document.createElement("canvas");
 indicatorCanvas.width = canvas.width;
@@ -182,6 +184,9 @@ function draw() {
         ctx.fillText(text, (canvas.width - textWidth) /2, canvas.height /2);
     }
 
+    // debug overlay (drawn on top of game, before HUD)
+    debugDrawer.draw(ctx, game, canvas.width, canvas.height);
+
     // write the mouse x and y in the bottom left corner
     ctx.setTransform(1,0,0,1,0,0);
     ctx.fillStyle = "black";
@@ -212,6 +217,19 @@ canvas.addEventListener("wheel", (event) => {
 // ---------- ARROW KEY PANNING ----------
 window.addEventListener("keydown", (event) => {
     const code = event.code;
+
+    if (code === "Backquote") {
+        debugDrawer.toggle();
+        event.preventDefault();
+        return;
+    }
+    if (code === "KeyN") {
+        if (debugDrawer.advance()) {
+            event.preventDefault();
+            return;
+        }
+    }
+
     if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {
         activePanKeys.add(code);
         event.preventDefault();
@@ -245,38 +263,45 @@ canvas.addEventListener("click", async (event) => {
     if (ai && currentPlayer === 1 && game.getState() === GameState.ONGOING) {
         aiThinking = true;
         // small delay so the human can see their own move
-        setTimeout(() => {
-            const maxRetries = 5;
-            let moveAccepted = false;
+        await new Promise(r => setTimeout(r, 300));
 
-            for (let attempt = 0; attempt < maxRetries; attempt++) {
-                const aiMove = ai!.getMove(game, 1);
-                if (game.addMove(aiMove.x, aiMove.y, 1)) {
+        const maxRetries = 5;
+        let moveAccepted = false;
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            const aiMove = await ai!.getMove(game, 1);
+
+            // step through debug phases if debug is enabled
+            const phases = ai!.getLastDebugPhases?.() ?? [];
+            if (phases.length > 0) {
+                await debugDrawer.stepThroughPhases(phases);
+            }
+
+            if (game.addMove(aiMove.x, aiMove.y, 1)) {
+                moveAccepted = true;
+                break;
+            }
+        }
+
+        // if AI repeatedly failed, place a random valid move to prevent consecutive human turns
+        if (!moveAccepted) {
+            console.warn("AI failed to produce a valid move, placing random fallback.");
+            const points = game.getPoints();
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const target = points[Math.floor(Math.random() * points.length)]!;
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 25 + Math.random() * 15;
+                const fx = target.x / SCALE + Math.cos(angle) * dist;
+                const fy = target.y / SCALE + Math.sin(angle) * dist;
+                if (game.addMove(fx, fy, 1)) {
                     moveAccepted = true;
                     break;
                 }
             }
+        }
 
-            // if AI repeatedly failed, place a random valid move to prevent consecutive human turns
-            if (!moveAccepted) {
-                console.warn("AI failed to produce a valid move, placing random fallback.");
-                const points = game.getPoints();
-                for (let attempt = 0; attempt < 100; attempt++) {
-                    const target = points[Math.floor(Math.random() * points.length)]!;
-                    const angle = Math.random() * Math.PI * 2;
-                    const dist = 25 + Math.random() * 15;
-                    const fx = target.x / SCALE + Math.cos(angle) * dist;
-                    const fy = target.y / SCALE + Math.sin(angle) * dist;
-                    if (game.addMove(fx, fy, 1)) {
-                        moveAccepted = true;
-                        break;
-                    }
-                }
-            }
-
-            currentPlayer = 0;
-            aiThinking = false;
-        }, 300);
+        currentPlayer = 0;
+        aiThinking = false;
     }
 });
 

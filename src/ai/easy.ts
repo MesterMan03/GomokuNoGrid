@@ -22,7 +22,7 @@ function candidateKey(x: number, y: number): string {
 }
 
 export class EasyAI implements AI {
-    getMove(game: Game, player: Player): ScoredMove {
+    async getMove(game: Game, player: Player): Promise<ScoredMove> {
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);

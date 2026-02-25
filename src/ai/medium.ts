@@ -1,18 +1,17 @@
-import { type AI, MoveReason, type ScoredMove } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
-import { IDEAL_SPACING, SCALE } from "../consts.ts";
+import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 
 const MAX_CANDIDATES = 10;
 const MINIMAX_DEPTH = 2; // root move already simulated → 2 more plies = 3-ply total
 const WIN_SCORE = 100_000;
 
 const LINE_WEIGHTS: Record<number, number> = {
-    2: 10,
-    3: 50,
-    4: 300,
+    2: 15,
+    3: 200,
+    4: 5000,
 };
 
-const OPENNESS_FACTOR = 1.5;
 const CLUSTERING_DECAY = 30;
 
 interface Candidate {
@@ -26,8 +25,23 @@ function candidateKey(x: number, y: number): string {
     return `${Math.round(x * SCALE)},${Math.round(y * SCALE)}`;
 }
 
+const REASON_COLORS: Record<MoveReason, string> = {
+    [MoveReason.CRITICAL_BLOCK]: "#ff0000",
+    [MoveReason.DEFENSIVE_BLOCK]: "#ff8800",
+    [MoveReason.OFFENSIVE_EXTENSION]: "#00cc00",
+    [MoveReason.NEARBY_RANDOM]: "#0088ff",
+    [MoveReason.FALLBACK]: "#888888",
+};
+
 export class MediumAI implements AI {
-    getMove(game: Game, player: Player): ScoredMove {
+    private debugPhases: DebugPhase[] = [];
+
+    getLastDebugPhases(): DebugPhase[] {
+        return this.debugPhases;
+    }
+
+    async getMove(game: Game, player: Player): Promise<ScoredMove> {
+        this.debugPhases = [];
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);
@@ -39,28 +53,57 @@ export class MediumAI implements AI {
         }
 
         // generate & rank candidates
-        const candidates = this.generateCandidates(game, player);
+        const allCandidates = this.generateCandidates(game, player);
 
-        if (candidates.length === 0) {
+        if (allCandidates.length === 0) {
             const move = this.fallbackMove(game, aiPoints, opponentPoints);
             return { ...move, score: 0, reason: MoveReason.FALLBACK };
         }
 
+        // Debug phase 1: All candidates
+        this.debugPhases.push({
+            title: "Candidate Generation",
+            description: `Generated ${allCandidates.length} candidate moves`,
+            markers: allCandidates.map(c => ({
+                x: c.x, y: c.y,
+                color: REASON_COLORS[c.reason],
+                label: `${c.reason.replace("_", " ")} (${c.threatSize})`,
+                radius: 4,
+            })),
+            lines: [],
+        });
+
         // sort by quick heuristic for better pruning at root
-        candidates.sort(
+        allCandidates.sort(
             (a, b) => this.quickScore(b, game, player) - this.quickScore(a, game, player),
         );
-        const topCandidates = candidates.slice(0, MAX_CANDIDATES);
+        const topCandidates = allCandidates.slice(0, MAX_CANDIDATES);
+
+        // Debug phase 2: Top candidates with scores
+        this.debugPhases.push({
+            title: "Top Candidates",
+            description: `Top ${topCandidates.length} after heuristic sort`,
+            markers: topCandidates.map((c, i) => ({
+                x: c.x, y: c.y,
+                color: REASON_COLORS[c.reason],
+                label: `#${i + 1} q=${this.quickScore(c, game, player).toFixed(0)}`,
+                radius: 5,
+            })),
+            lines: [],
+        });
 
         // minimax search from each root candidate
         let bestScore = -Infinity;
         let bestMove: Candidate | null = null;
+        const minimaxResults: Array<{ candidate: Candidate; score: number }> = [];
 
         for (const candidate of topCandidates) {
             const child = game.clone();
-            child.addMove(candidate.x, candidate.y, player);
+            const placed = child.addMove(candidate.x, candidate.y, player);
+            if (!placed) continue;
 
             const score = this.minimax(child, MINIMAX_DEPTH, -Infinity, Infinity, false, player);
+            minimaxResults.push({ candidate, score });
 
             if (score > bestScore) {
                 bestScore = score;
@@ -68,10 +111,36 @@ export class MediumAI implements AI {
             }
         }
 
+        // Debug phase 3: Minimax results
+        this.debugPhases.push({
+            title: "Minimax Evaluation",
+            description: `Evaluated ${minimaxResults.length} moves, best=${bestScore.toFixed(0)}`,
+            markers: minimaxResults.map(({ candidate: c, score }) => ({
+                x: c.x, y: c.y,
+                color: c === bestMove ? "#ffff00" : REASON_COLORS[c.reason],
+                label: `mm=${score.toFixed(0)}`,
+                radius: c === bestMove ? 8 : 5,
+            })),
+            lines: [],
+        });
+
         if (!bestMove) {
             const move = this.fallbackMove(game, aiPoints, opponentPoints);
             return { ...move, score: 0, reason: MoveReason.FALLBACK };
         }
+
+        // Debug phase 4: Selected move
+        this.debugPhases.push({
+            title: "Selected Move",
+            description: `(${bestMove.x.toFixed(1)}, ${bestMove.y.toFixed(1)}) score=${bestScore.toFixed(0)} reason=${bestMove.reason}`,
+            markers: [{
+                x: bestMove.x, y: bestMove.y,
+                color: "#ffff00",
+                label: `★ ${bestScore.toFixed(0)}`,
+                radius: 10,
+            }],
+            lines: [],
+        });
 
         return {
             x: bestMove.x,
@@ -118,7 +187,7 @@ export class MediumAI implements AI {
             let maxEval = -Infinity;
             for (const move of topMoves) {
                 const child = state.clone();
-                child.addMove(move.x, move.y, currentPlayer);
+                if (!child.addMove(move.x, move.y, currentPlayer)) continue;
                 const evalScore = this.minimax(child, depth - 1, alpha, beta, false, aiPlayer);
                 maxEval = Math.max(maxEval, evalScore);
                 alpha = Math.max(alpha, evalScore);
@@ -129,7 +198,7 @@ export class MediumAI implements AI {
             let minEval = Infinity;
             for (const move of topMoves) {
                 const child = state.clone();
-                child.addMove(move.x, move.y, currentPlayer);
+                if (!child.addMove(move.x, move.y, currentPlayer)) continue;
                 const evalScore = this.minimax(child, depth - 1, alpha, beta, true, aiPlayer);
                 minEval = Math.min(minEval, evalScore);
                 beta = Math.min(beta, evalScore);
@@ -147,10 +216,10 @@ export class MediumAI implements AI {
 
         // line strength
         for (const group of state.getLineGroups(aiPlayer)) {
-            score += this.lineScore(group);
+            score += this.lineScore(group, state);
         }
         for (const group of state.getLineGroups(opponent)) {
-            score -= this.lineScore(group);
+            score -= this.lineScore(group, state) * 1.3;
         }
 
         // positional clustering bonus
@@ -172,11 +241,45 @@ export class MediumAI implements AI {
         return score;
     }
 
-    private lineScore(group: LineGroup): number {
-        const size = group.stones.size;
-        if (size >= 5) return WIN_SCORE;
-        const weight = LINE_WEIGHTS[size] ?? size * 5;
-        return weight * OPENNESS_FACTOR;
+    private lineScore(group: LineGroup, state: Game): number {
+        const projections = group.projections;
+        if (projections.length < 2) return 0;
+
+        // count longest consecutive run (stones within WIN_D_MAX gap)
+        let maxRun = 1;
+        let currentRun = 1;
+        for (let i = 0; i < projections.length - 1; i++) {
+            const delta = projections[i + 1]! - projections[i]!;
+            if (delta <= WIN_D_MAX) {
+                currentRun++;
+                maxRun = Math.max(maxRun, currentRun);
+            } else {
+                currentRun = 1;
+            }
+        }
+
+        if (maxRun >= 5) return WIN_SCORE;
+        if (maxRun < 2) return 0;
+
+        // check open ends – can the line be extended?
+        const minProj = projections[0]!;
+        const maxProj = projections[projections.length - 1]!;
+        const spacing = IDEAL_SPACING * SCALE;
+
+        const ext1X = (group.originX + group.dirX * (minProj - spacing)) / SCALE;
+        const ext1Y = (group.originY + group.dirY * (minProj - spacing)) / SCALE;
+        const ext2X = (group.originX + group.dirX * (maxProj + spacing)) / SCALE;
+        const ext2Y = (group.originY + group.dirY * (maxProj + spacing)) / SCALE;
+
+        let openEnds = 0;
+        if (state.isValidMove(ext1X, ext1Y)) openEnds++;
+        if (state.isValidMove(ext2X, ext2Y)) openEnds++;
+
+        if (openEnds === 0) return 0; // dead line – no value
+
+        const weight = LINE_WEIGHTS[maxRun] ?? maxRun * 5;
+        const openFactor = openEnds === 2 ? 3.0 : 1.0;
+        return weight * openFactor;
     }
 
     // ── quick heuristic for move ordering ────────────────────────────────
@@ -255,7 +358,7 @@ export class MediumAI implements AI {
 
     private addBlockingMoves(opponentGroups: ReadonlyArray<LineGroup>, candidates: Map<string, Candidate>): void {
         for (const group of opponentGroups) {
-            if (group.stones.size < 2) continue; // lower threshold than Easy (was 3)
+            if (group.stones.size < 2) continue;
 
             const minProj = group.projections[0]!;
             const maxProj = group.projections[group.projections.length - 1]!;
