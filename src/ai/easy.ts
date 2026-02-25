@@ -1,10 +1,11 @@
-import type { AI } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove } from "./types.ts";
 import type { Game, Player, Point, LineGroup } from "../game.ts";
-import { IDEAL_SPACING, MAX_PLACEMENT_DISTANCE, SCALE } from "../consts.ts";
+import { IDEAL_SPACING, SCALE } from "../consts.ts";
 
 const TOP_K = 3;
 const NOISE_AMOUNT = 15;
-const DEFENSIVE_WEIGHT = 50;
+const CRITICAL_BLOCK_SCORE = 500;
+const DEFENSIVE_BLOCK_SCORE = 150;
 const OFFENSIVE_WEIGHT = 20;
 const CLUSTERING_DECAY = 30;
 const NEARBY_RANDOM_COUNT = 2;
@@ -12,10 +13,12 @@ const NEARBY_RANDOM_COUNT = 2;
 interface Candidate {
     x: number;
     y: number;
+    reason: MoveReason;
+    threatSize: number;
 }
 
 export class EasyAI implements AI {
-    getMove(game: Game, player: Player): { x: number; y: number } {
+    getMove(game: Game, player: Player): ScoredMove {
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);
@@ -24,7 +27,8 @@ export class EasyAI implements AI {
 
         // special case: AI has no stones yet
         if (aiPoints.length === 0) {
-            return this.firstMove(game, opponentPoints);
+            const move = this.firstMove(game, opponentPoints);
+            return { ...move, score: 0, reason: MoveReason.FALLBACK };
         }
 
         // generate candidates
@@ -43,15 +47,20 @@ export class EasyAI implements AI {
         const candidates = [...candidateMap.values()].filter(c => game.isValidMove(c.x, c.y));
 
         if (candidates.length === 0) {
-            return this.fallbackMove(game, aiPoints, opponentPoints);
+            const move = this.fallbackMove(game, aiPoints, opponentPoints);
+            return { ...move, score: 0, reason: MoveReason.FALLBACK };
         }
 
         // score candidates
-        const scored = candidates.map(c => ({
-            x: c.x,
-            y: c.y,
-            score: this.scoreMove(c, aiPoints, opponentGroups),
-        }));
+        const scored: ScoredMove[] = candidates.map(c => this.scoreMove(c, aiPoints));
+
+        // critical blocks always take priority
+        const criticalBlocks = scored.filter(m => m.reason === MoveReason.CRITICAL_BLOCK);
+        if (criticalBlocks.length > 0) {
+            criticalBlocks.sort((a, b) => b.score - a.score);
+            const topK = criticalBlocks.slice(0, TOP_K);
+            return topK[Math.floor(Math.random() * topK.length)]!;
+        }
 
         // sort descending by score
         scored.sort((a, b) => b.score - a.score);
@@ -92,8 +101,16 @@ export class EasyAI implements AI {
             const ext2X = (group.originX + group.dirX * (maxProj + spacing)) / SCALE;
             const ext2Y = (group.originY + group.dirY * (maxProj + spacing)) / SCALE;
 
-            candidates.set(`${Math.round(ext1X)},${Math.round(ext1Y)}`, { x: ext1X, y: ext1Y });
-            candidates.set(`${Math.round(ext2X)},${Math.round(ext2Y)}`, { x: ext2X, y: ext2Y });
+            const key1 = `${Math.round(ext1X)},${Math.round(ext1Y)}`;
+            const key2 = `${Math.round(ext2X)},${Math.round(ext2Y)}`;
+
+            // only set if no higher-priority candidate exists at this position
+            if (!candidates.has(key1) || candidates.get(key1)!.reason === MoveReason.NEARBY_RANDOM) {
+                candidates.set(key1, { x: ext1X, y: ext1Y, reason: MoveReason.OFFENSIVE_EXTENSION, threatSize: 0 });
+            }
+            if (!candidates.has(key2) || candidates.get(key2)!.reason === MoveReason.NEARBY_RANDOM) {
+                candidates.set(key2, { x: ext2X, y: ext2Y, reason: MoveReason.OFFENSIVE_EXTENSION, threatSize: 0 });
+            }
         }
     }
 
@@ -110,8 +127,31 @@ export class EasyAI implements AI {
             const ext2X = (group.originX + group.dirX * (maxProj + spacing)) / SCALE;
             const ext2Y = (group.originY + group.dirY * (maxProj + spacing)) / SCALE;
 
-            candidates.set(`${Math.round(ext1X)},${Math.round(ext1Y)}`, { x: ext1X, y: ext1Y });
-            candidates.set(`${Math.round(ext2X)},${Math.round(ext2Y)}`, { x: ext2X, y: ext2Y });
+            const reason = group.stones.size >= 4 ? MoveReason.CRITICAL_BLOCK : MoveReason.DEFENSIVE_BLOCK;
+
+            const key1 = `${Math.round(ext1X)},${Math.round(ext1Y)}`;
+            const key2 = `${Math.round(ext2X)},${Math.round(ext2Y)}`;
+
+            // blocking moves always override lower-priority candidates
+            const existing1 = candidates.get(key1);
+            if (!existing1 || this.reasonPriority(reason) > this.reasonPriority(existing1.reason) || group.stones.size > existing1.threatSize) {
+                candidates.set(key1, { x: ext1X, y: ext1Y, reason, threatSize: group.stones.size });
+            }
+
+            const existing2 = candidates.get(key2);
+            if (!existing2 || this.reasonPriority(reason) > this.reasonPriority(existing2.reason) || group.stones.size > existing2.threatSize) {
+                candidates.set(key2, { x: ext2X, y: ext2Y, reason, threatSize: group.stones.size });
+            }
+        }
+    }
+
+    private reasonPriority(reason: MoveReason): number {
+        switch (reason) {
+            case MoveReason.CRITICAL_BLOCK: return 4;
+            case MoveReason.DEFENSIVE_BLOCK: return 3;
+            case MoveReason.OFFENSIVE_EXTENSION: return 2;
+            case MoveReason.NEARBY_RANDOM: return 1;
+            case MoveReason.FALLBACK: return 0;
         }
     }
 
@@ -122,21 +162,28 @@ export class EasyAI implements AI {
                 const dist = IDEAL_SPACING + (Math.random() - 0.5) * 10;
                 const x = stone.x / SCALE + Math.cos(angle) * dist;
                 const y = stone.y / SCALE + Math.sin(angle) * dist;
-                candidates.set(`${Math.round(x)},${Math.round(y)}`, { x, y });
+                const key = `${Math.round(x)},${Math.round(y)}`;
+                // never overwrite a higher-priority candidate
+                if (!candidates.has(key)) {
+                    candidates.set(key, { x, y, reason: MoveReason.NEARBY_RANDOM, threatSize: 0 });
+                }
             }
         }
     }
 
-    private scoreMove(
-        move: Candidate,
-        aiPoints: Point[],
-        opponentGroups: LineGroup[],
-    ): number {
+    private scoreMove(candidate: Candidate, aiPoints: Point[]): ScoredMove {
         let score = 0;
-        const mx = move.x * SCALE;
-        const my = move.y * SCALE;
+        const mx = candidate.x * SCALE;
+        const my = candidate.y * SCALE;
 
-        // Feature 1: alignment gain — bonus for being at ideal spacing from AI stones
+        // base score from move reason
+        if (candidate.reason === MoveReason.CRITICAL_BLOCK) {
+            score += CRITICAL_BLOCK_SCORE;
+        } else if (candidate.reason === MoveReason.DEFENSIVE_BLOCK) {
+            score += DEFENSIVE_BLOCK_SCORE;
+        }
+
+        // alignment gain — bonus for being at ideal spacing from AI stones
         for (const stone of aiPoints) {
             const dx = stone.x - mx;
             const dy = stone.y - my;
@@ -146,20 +193,7 @@ export class EasyAI implements AI {
             }
         }
 
-        // Feature 2: defensive bonus — near threatening opponent lines
-        for (const group of opponentGroups) {
-            if (group.stones.size < 3) continue;
-
-            const vx = mx - group.originX;
-            const vy = my - group.originY;
-            const perp = Math.abs(vx * group.dirY - vy * group.dirX) / SCALE;
-
-            if (perp < IDEAL_SPACING) {
-                score += DEFENSIVE_WEIGHT * group.stones.size;
-            }
-        }
-
-        // Feature 3: clustering bonus
+        // clustering bonus
         let minDist = Infinity;
         for (const stone of aiPoints) {
             const dx = stone.x - mx;
@@ -171,10 +205,15 @@ export class EasyAI implements AI {
             score += 10 * Math.exp(-minDist / CLUSTERING_DECAY);
         }
 
-        // Feature 4: random noise
+        // random noise
         score += (Math.random() - 0.5) * 2 * NOISE_AMOUNT;
 
-        return score;
+        return {
+            x: candidate.x,
+            y: candidate.y,
+            score,
+            reason: candidate.reason,
+        };
     }
 
     private fallbackMove(game: Game, aiPoints: Point[], opponentPoints: Point[]): { x: number; y: number } {

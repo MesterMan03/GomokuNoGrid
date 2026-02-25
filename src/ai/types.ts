@@ -7,6 +7,21 @@ export enum Difficulty {
     INSANE = "insane",
 }
 
+export enum MoveReason {
+    CRITICAL_BLOCK = "critical_block",
+    DEFENSIVE_BLOCK = "defensive_block",
+    OFFENSIVE_EXTENSION = "offensive_extension",
+    NEARBY_RANDOM = "nearby_random",
+    FALLBACK = "fallback",
+}
+
+export interface ScoredMove {
+    x: number;
+    y: number;
+    score: number;
+    reason: MoveReason;
+}
+
 export interface AI {
-    getMove(game: Game, player: Player): { x: number; y: number };
+    getMove(game: Game, player: Player): ScoredMove;
 }
