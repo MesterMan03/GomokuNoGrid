@@ -145,7 +145,7 @@ function draw() {
             ctx.globalAlpha = 1.0;
         }
 
-        // draw a green line if the distance is below WIN_D_MAX and red otherwise
+        // draw a green line if the distance is below WIN_D_MAX
         const closestPoints = game.getClosestPlayerPoint({ x: worldX * SCALE, y: worldY * SCALE, player: currentPlayer }, 3) ?? [];
         for(const closestPoint of closestPoints) {
             const dx = closestPoint.x / SCALE - worldX;
@@ -280,5 +280,3 @@ modeSelect.addEventListener("click", (event) => {
     currentPlayer = 0;
     requestAnimationFrame(draw);
 });
-
-window.game = game;

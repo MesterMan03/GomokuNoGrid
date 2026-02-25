@@ -86,10 +86,7 @@ export class Game {
             console.log("Move rejected: too close to existing move");
             return null;
         }
-        if(nearest.length > 0 && nearest[0]!![1] < SYMBOL_RADIUS * 2) {
-            console.log("Move rejected: too close to existing move");
-            return null;
-        }
+
 
         // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
         const sortedDistances = nearest.map(([_, dist]) => dist).sort((a, b) => a - b);
@@ -222,8 +219,8 @@ export class Game {
         return this.points.filter(p => p.player === player);
     }
 
-    getLineGroups(player: Player): LineGroup[] {
-        return player === 0 ? this.lineGroups0 : this.lineGroups1;
+    getLineGroups(player: Player): ReadonlyArray<LineGroup> {
+        return (player === 0 ? this.lineGroups0 : this.lineGroups1).slice();
     }
 
     isValidMove(x: number, y: number): boolean {
@@ -238,9 +235,7 @@ export class Game {
 
         if (nearest.length === 0) return true;
         if (nearest[0]![1] < SYMBOL_RADIUS * 2) return false;
-        if (nearest[0]![1] > MAX_PLACEMENT_DISTANCE) return false;
-
-        return true;
+        return nearest[0]![1] <= MAX_PLACEMENT_DISTANCE;
     }
 
     private updateLineGroups(point: Point): void {
