@@ -69,6 +69,18 @@ export class Game {
         return this.winPoints.slice();
     }
 
+    /**
+     * Create a deep copy of this game by replaying all recorded moves.
+     * Used by AI to simulate future states without mutating the real game.
+     */
+    clone(): Game {
+        const copy = new Game();
+        for (const point of this.points) {
+            copy.addMove(point.x / SCALE, point.y / SCALE, point.player);
+        }
+        return copy;
+    }
+
     addMove(x: number, y: number, player: Player): Point | null {
         if(this.state !== GameState.ONGOING) {
             console.log("Move rejected: game already ended");

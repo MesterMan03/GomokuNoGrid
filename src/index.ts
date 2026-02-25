@@ -2,6 +2,7 @@ import {MAX_PLACEMENT_DISTANCE, SCALE, SYMBOL_RADIUS, WIN_D_MAX} from "./consts.
 import {Game, GameState, type Player} from "./game.ts";
 import type {AI} from "./ai/types.ts";
 import {EasyAI} from "./ai/easy.ts";
+import {MediumAI} from "./ai/medium.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -296,6 +297,8 @@ modeSelect.addEventListener("click", (event) => {
         ai = null;
     } else if (mode === "easy") {
         ai = new EasyAI();
+    } else if (mode === "normal") {
+        ai = new MediumAI();
     } else {
         return; // disabled modes
     }
