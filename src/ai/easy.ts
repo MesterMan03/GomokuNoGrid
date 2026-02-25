@@ -92,7 +92,7 @@ export class EasyAI implements AI {
         return { x: target.x / SCALE + IDEAL_SPACING, y: target.y / SCALE };
     }
 
-    private addLineExtensions(groups: LineGroup[], candidates: Map<string, Candidate>): void {
+    private addLineExtensions(groups: ReadonlyArray<LineGroup>, candidates: Map<string, Candidate>): void {
         for (const group of groups) {
             if (group.stones.size < 2) continue;
 
@@ -118,7 +118,7 @@ export class EasyAI implements AI {
         }
     }
 
-    private addBlockingMoves(opponentGroups: LineGroup[], candidates: Map<string, Candidate>): void {
+    private addBlockingMoves(opponentGroups: ReadonlyArray<LineGroup>, candidates: Map<string, Candidate>): void {
         for (const group of opponentGroups) {
             if (group.stones.size < 3) continue;
 
