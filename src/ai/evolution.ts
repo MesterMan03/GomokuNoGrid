@@ -1,9 +1,32 @@
-import { Game, GameState, type Player } from "../game.ts";
+import { Game, GameState, type Player, type Point } from "../game.ts";
+import { EasyAI } from "./easy.ts";
 import { MediumAI } from "./medium.ts";
-import { type MediumAIConfig, DEFAULT_MEDIUM_CONFIG } from "./types.ts";
-import { IDEAL_SPACING, SCALE } from "../consts.ts";
+import { type AI, type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, type EasyAIConfig, type MediumAIConfig } from "./types.ts";
+import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 
-/** Parameters controlling a single evolution run. */
+// ── AI Registry ──────────────────────────────────────────────────────────
+
+const AI_REGISTRY: Record<string, AIDefinition> = {
+    easy: {
+        defaultConfig: DEFAULT_EASY_CONFIG,
+        createAI: (config) => new EasyAI(config as Partial<EasyAIConfig>),
+    },
+    normal: {
+        defaultConfig: DEFAULT_MEDIUM_CONFIG,
+        createAI: (config) => new MediumAI(config as Partial<MediumAIConfig>),
+    },
+};
+
+export function getAIDefinition(difficulty: string): AIDefinition | undefined {
+    return AI_REGISTRY[difficulty];
+}
+
+export function getAvailableDifficulties(): string[] {
+    return Object.keys(AI_REGISTRY);
+}
+
+// ── Evolution Parameters ────────────────────────────────────────────────
+
 export interface EvolutionParams {
     simsPerBatch: number;
     batches: number;
@@ -28,23 +51,67 @@ export const DEFAULT_EVOLUTION_PARAMS: EvolutionParams = {
 
 export interface EvolutionResult {
     generation: number;
-    bestConfig: MediumAIConfig;
+    bestConfig: Record<string, number>;
     bestFitness: number;
     avgFitness: number;
     log: string;
 }
 
-/**
- * Play a headless game between two AIs, returning +1 if ai0 wins, -1 if ai1 wins,
- * or a heuristic score in [-1, 1] if the game times out.
- */
-async function playMatch(ai0: MediumAI, ai1: MediumAI, maxMoves: number): Promise<number> {
-    const game = new Game();
+export interface GameUpdate {
+    individualIndex: number;
+    points: Array<{ x: number; y: number; player: 0 | 1 }>;
+    state: number;
+    gen: number;
+}
 
-    // Place first stone at center
+// ── Standalone Fitness Evaluation ───────────────────────────────────────
+
+function evaluatePosition(game: Game, player: Player): number {
+    const opponent: Player = player === 0 ? 1 : 0;
+    let score = 0;
+
+    for (const group of game.getLineGroups(player)) {
+        const projections = group.projections;
+        if (projections.length < 2) continue;
+        let maxRun = 1, run = 1;
+        for (let i = 0; i < projections.length - 1; i++) {
+            if (projections[i + 1]! - projections[i]! <= WIN_D_MAX) { run++; maxRun = Math.max(maxRun, run); }
+            else run = 1;
+        }
+        if (maxRun >= 5) return 10000;
+        if (maxRun >= 4) score += 300;
+        else if (maxRun >= 3) score += 50;
+        else if (maxRun >= 2) score += 10;
+    }
+
+    for (const group of game.getLineGroups(opponent)) {
+        const projections = group.projections;
+        if (projections.length < 2) continue;
+        let maxRun = 1, run = 1;
+        for (let i = 0; i < projections.length - 1; i++) {
+            if (projections[i + 1]! - projections[i]! <= WIN_D_MAX) { run++; maxRun = Math.max(maxRun, run); }
+            else run = 1;
+        }
+        if (maxRun >= 5) return -10000;
+        if (maxRun >= 4) score -= 300;
+        else if (maxRun >= 3) score -= 50;
+        else if (maxRun >= 2) score -= 10;
+    }
+
+    return score;
+}
+
+// ── Match Simulation ────────────────────────────────────────────────────
+
+async function playMatch(
+    ai0: AI,
+    ai1: AI,
+    maxMoves: number,
+    onUpdate?: (points: Point[], state: GameState) => void,
+): Promise<number> {
+    const game = new Game();
     game.addMove(400, 400, 0);
 
-    // AI1 responds near center
     const firstReply = await ai1.getMove(game, 1);
     game.addMove(firstReply.x, firstReply.y, 1);
 
@@ -56,7 +123,6 @@ async function playMatch(ai0: MediumAI, ai1: MediumAI, maxMoves: number): Promis
         const move = await ai.getMove(game, currentPlayer);
 
         if (!game.addMove(move.x, move.y, currentPlayer)) {
-            // failed placement — try fallback
             let placed = false;
             const points = game.getPoints();
             for (let attempt = 0; attempt < 50; attempt++) {
@@ -70,80 +136,110 @@ async function playMatch(ai0: MediumAI, ai1: MediumAI, maxMoves: number): Promis
                     break;
                 }
             }
-            if (!placed) break; // can't place anything, end game
+            if (!placed) break;
         }
 
         currentPlayer = currentPlayer === 0 ? 1 : 0;
+
+        // Send game state update and yield periodically
+        if (moveNum % 3 === 0) {
+            onUpdate?.(game.getPoints(), game.getState());
+            await new Promise(r => setTimeout(r, 0));
+        }
     }
+
+    onUpdate?.(game.getPoints(), game.getState());
 
     const state = game.getState();
     if (state === GameState.WIN_0) return 1;
     if (state === GameState.WIN_1) return -1;
 
-    // No win — use heuristic evaluation from ai0's perspective
-    const eval0 = ai0.evaluate(game, 0);
-    // Clamp to [-1, 1]
+    const eval0 = evaluatePosition(game, 0);
     return Math.max(-1, Math.min(1, eval0 / 1000));
 }
+
+// ── Genetic Operators ───────────────────────────────────────────────────
 
 const MIN_CONFIG_VALUE = 0.1;
 const MIN_CANDIDATES = 3;
 
-/** Mutate a config by randomly perturbing each numeric field. */
 function mutateConfig(
-    base: MediumAIConfig,
+    base: Record<string, number>,
     rate: number,
     strength: number,
-): MediumAIConfig {
+): Record<string, number> {
     const result = { ...base };
-    const keys = Object.keys(result) as Array<keyof MediumAIConfig>;
+    const keys = Object.keys(result);
     for (const key of keys) {
         if (Math.random() < rate) {
-            const val = result[key] as number;
+            const val = result[key]!;
             const delta = val * strength * (Math.random() * 2 - 1);
-            (result as Record<string, number>)[key] = Math.max(MIN_CONFIG_VALUE, val + delta);
+            result[key] = Math.max(MIN_CONFIG_VALUE, val + delta);
         }
     }
-    result.maxCandidates = Math.max(MIN_CANDIDATES, Math.round(result.maxCandidates));
+    // Clamp integer-valued fields
+    if (result["maxCandidates"] !== undefined) {
+        result["maxCandidates"] = Math.max(MIN_CANDIDATES, Math.round(result["maxCandidates"]));
+    }
+    if (result["topK"] !== undefined) {
+        result["topK"] = Math.max(1, Math.round(result["topK"]));
+    }
+    if (result["nearbyRandomCount"] !== undefined) {
+        result["nearbyRandomCount"] = Math.max(0, Math.round(result["nearbyRandomCount"]));
+    }
     return result;
 }
 
-/** Crossover two configs by picking each field from one parent. */
-function crossover(a: MediumAIConfig, b: MediumAIConfig): MediumAIConfig {
+function crossover(
+    a: Record<string, number>,
+    b: Record<string, number>,
+): Record<string, number> {
     const result = { ...a };
-    const keys = Object.keys(result) as Array<keyof MediumAIConfig>;
+    const keys = Object.keys(result);
     for (const key of keys) {
-        if (Math.random() < 0.5) {
-            (result as Record<string, number>)[key] = b[key] as number;
+        if (Math.random() < 0.5 && b[key] !== undefined) {
+            result[key] = b[key]!;
         }
     }
-    result.maxCandidates = Math.max(MIN_CANDIDATES, Math.round(result.maxCandidates));
+    if (result["maxCandidates"] !== undefined) {
+        result["maxCandidates"] = Math.max(MIN_CANDIDATES, Math.round(result["maxCandidates"]));
+    }
+    if (result["topK"] !== undefined) {
+        result["topK"] = Math.max(1, Math.round(result["topK"]));
+    }
+    if (result["nearbyRandomCount"] !== undefined) {
+        result["nearbyRandomCount"] = Math.max(0, Math.round(result["nearbyRandomCount"]));
+    }
     return result;
 }
 
-/**
- * Run the full evolutionary optimization. Calls `onProgress` after each generation
- * with the current best results. Returns the final best config.
- */
+// ── Main Evolution Runner ───────────────────────────────────────────────
+
 export async function runEvolution(
     params: EvolutionParams,
+    difficulty: string,
     onProgress: (result: EvolutionResult) => void,
+    onGameUpdate?: (update: GameUpdate) => void,
     signal?: AbortSignal,
-): Promise<MediumAIConfig> {
-    const totalGenerations = params.batches;
-    const baseline = new MediumAI(); // uses DEFAULT_MEDIUM_CONFIG
+): Promise<Record<string, number>> {
+    const definition = getAIDefinition(difficulty);
+    if (!definition) {
+        throw new Error(`Unknown difficulty: ${difficulty}. Available: ${getAvailableDifficulties().join(", ")}`);
+    }
 
-    // Initialize population
-    let population: MediumAIConfig[] = [];
+    const totalGenerations = params.batches;
+    const baseline = definition.createAI(definition.defaultConfig);
+
+    let population: Record<string, number>[] = [];
     for (let i = 0; i < params.populationSize; i++) {
         if (i === 0) {
-            population.push({ ...DEFAULT_MEDIUM_CONFIG }); // keep one default
+            population.push({ ...definition.defaultConfig });
         } else {
-            population.push(mutateConfig(DEFAULT_MEDIUM_CONFIG, 0.8, params.mutationStrength));
+            population.push(mutateConfig(definition.defaultConfig, 0.8, params.mutationStrength));
         }
     }
 
-    let bestOverall: MediumAIConfig = { ...DEFAULT_MEDIUM_CONFIG };
+    let bestOverall: Record<string, number> = { ...definition.defaultConfig };
     let bestOverallFitness = -Infinity;
     const maxMoves = params.startingMoves;
 
@@ -153,28 +249,36 @@ export async function runEvolution(
         const currentMaxMoves = maxMoves + gen * params.extraMovesPerGen;
         const fitnesses: number[] = [];
 
-        // Evaluate each individual against the baseline
         for (let i = 0; i < population.length; i++) {
             if (signal?.aborted) break;
 
-            const candidate = new MediumAI(population[i]);
+            const candidate = definition.createAI(population[i]!);
             let totalFitness = 0;
 
             for (let sim = 0; sim < params.simsPerBatch; sim++) {
                 if (signal?.aborted) break;
 
-                // Alternate who goes first
+                const updateHandler = onGameUpdate
+                    ? (points: Point[], state: GameState) => {
+                        onGameUpdate({
+                            individualIndex: i,
+                            points: points.map(p => ({ x: p.x, y: p.y, player: p.player })),
+                            state: state as number,
+                            gen: gen + 1,
+                        });
+                    }
+                    : undefined;
+
                 if (sim % 2 === 0) {
-                    totalFitness += await playMatch(candidate, baseline, currentMaxMoves);
+                    totalFitness += await playMatch(candidate, baseline, currentMaxMoves, updateHandler);
                 } else {
-                    totalFitness -= await playMatch(baseline, candidate, currentMaxMoves);
+                    totalFitness -= await playMatch(baseline, candidate, currentMaxMoves, updateHandler);
                 }
             }
 
             fitnesses.push(totalFitness / params.simsPerBatch);
         }
 
-        // Sort population by fitness
         const indexed = population.map((cfg, i) => ({ cfg, fit: fitnesses[i]! }));
         indexed.sort((a, b) => b.fit - a.fit);
 
@@ -194,15 +298,10 @@ export async function runEvolution(
             log: `Gen ${gen + 1}/${totalGenerations}: best=${bestFitness.toFixed(3)} avg=${avgFitness.toFixed(3)} moves=${currentMaxMoves}`,
         });
 
-        // Build next generation
-        const nextPop: MediumAIConfig[] = [];
-
-        // Elites survive unchanged
+        const nextPop: Record<string, number>[] = [];
         for (let i = 0; i < Math.min(params.eliteCount, indexed.length); i++) {
             nextPop.push({ ...indexed[i]!.cfg });
         }
-
-        // Fill rest with offspring
         while (nextPop.length < params.populationSize) {
             const parentA = indexed[Math.floor(Math.random() * Math.min(params.eliteCount + 2, indexed.length))]!.cfg;
             const parentB = indexed[Math.floor(Math.random() * indexed.length)]!.cfg;

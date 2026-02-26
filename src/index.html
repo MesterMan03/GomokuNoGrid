@@ -20,6 +20,12 @@
 <div id="training-panel" style="display:none;">
     <h2>AI Evolution Training</h2>
     <div class="train-form">
+        <label>Difficulty to train:
+            <select id="train-difficulty">
+                <option value="easy">Easy</option>
+                <option value="normal" selected>Normal (Medium)</option>
+            </select>
+        </label>
         <label>Simulations per batch: <input id="train-sims" type="number" value="4" min="1" max="50"></label>
         <label>Batches (generations): <input id="train-batches" type="number" value="5" min="1" max="100"></label>
         <label>Starting moves: <input id="train-start-moves" type="number" value="30" min="10" max="200"></label>
@@ -32,6 +38,8 @@
         <button id="train-stop" disabled>Stop</button>
         <button id="train-back">← Back</button>
     </div>
+    <h3>Live Games</h3>
+    <div id="train-games" class="train-games"></div>
     <div id="train-log" class="train-log"></div>
     <h3>Best Config</h3>
     <pre id="train-result">Not started</pre>

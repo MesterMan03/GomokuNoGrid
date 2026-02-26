@@ -5,7 +5,7 @@ import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
-import { runEvolution, DEFAULT_EVOLUTION_PARAMS, type EvolutionParams } from "./ai/evolution.ts";
+import { DEFAULT_EVOLUTION_PARAMS } from "./ai/evolution.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const modeSelect = document.getElementById("mode-select") as HTMLDivElement;
@@ -215,11 +215,83 @@ const trainStartBtn = document.getElementById("train-start") as HTMLButtonElemen
 const trainStopBtn = document.getElementById("train-stop") as HTMLButtonElement;
 const trainLog = document.getElementById("train-log") as HTMLDivElement;
 const trainResult = document.getElementById("train-result") as HTMLPreElement;
+const trainGamesContainer = document.getElementById("train-games") as HTMLDivElement;
+const trainDifficulty = document.getElementById("train-difficulty") as HTMLSelectElement;
 
-let trainAbort: AbortController | null = null;
+let trainWorker: Worker | null = null;
+const trainCanvases = new Map<number, HTMLCanvasElement>();
 
-trainStartBtn?.addEventListener("click", async () => {
-    const params: EvolutionParams = {
+function getOrCreateTrainCanvas(index: number): HTMLCanvasElement {
+    let canvas = trainCanvases.get(index);
+    if (!canvas) {
+        canvas = document.createElement("canvas");
+        canvas.width = 200;
+        canvas.height = 200;
+        canvas.className = "train-canvas";
+
+        const label = document.createElement("div");
+        label.className = "train-canvas-label";
+        label.textContent = `Individual ${index}`;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "train-canvas-wrapper";
+        wrapper.appendChild(label);
+        wrapper.appendChild(canvas);
+        trainGamesContainer.appendChild(wrapper);
+        trainCanvases.set(index, canvas);
+    }
+    return canvas;
+}
+
+function drawMiniGame(canvas: HTMLCanvasElement, points: Array<{ x: number; y: number; player: 0 | 1 }>) {
+    const ctx = canvas.getContext("2d")!;
+    const size = canvas.width;
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "#f0f0f0";
+    ctx.fillRect(0, 0, size, size);
+
+    if (points.length === 0) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+    }
+
+    const pad = 15;
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const sc = Math.min((size - pad * 2) / rangeX, (size - pad * 2) / rangeY);
+    const ox = pad + (size - pad * 2 - rangeX * sc) / 2;
+    const oy = pad + (size - pad * 2 - rangeY * sc) / 2;
+
+    const r = Math.max(2, Math.min(5, 3000 / Math.max(rangeX, rangeY)));
+    for (const p of points) {
+        const x = (p.x - minX) * sc + ox;
+        const y = (p.y - minY) * sc + oy;
+        if (p.player === 0) {
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x - r, y - r);
+            ctx.lineTo(x + r, y + r);
+            ctx.moveTo(x + r, y - r);
+            ctx.lineTo(x - r, y + r);
+            ctx.stroke();
+        } else {
+            ctx.strokeStyle = "red";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+}
+
+trainStartBtn?.addEventListener("click", () => {
+    const params = {
         simsPerBatch: parseInt((document.getElementById("train-sims") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.simsPerBatch,
         batches: parseInt((document.getElementById("train-batches") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.batches,
         startingMoves: parseInt((document.getElementById("train-start-moves") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.startingMoves,
@@ -229,37 +301,63 @@ trainStartBtn?.addEventListener("click", async () => {
         eliteCount: DEFAULT_EVOLUTION_PARAMS.eliteCount,
         populationSize: DEFAULT_EVOLUTION_PARAMS.populationSize,
     };
+    const difficulty = trainDifficulty?.value || "normal";
 
-    trainAbort = new AbortController();
+    // Clean up previous canvases
+    trainGamesContainer.innerHTML = "";
+    trainCanvases.clear();
+
     trainStartBtn.disabled = true;
     trainStopBtn.disabled = false;
     trainLog.innerHTML = "";
     trainResult.textContent = "Running...";
 
-    try {
-        const best = await runEvolution(params, (result) => {
+    trainWorker = new Worker(new URL("./training.worker.ts", import.meta.url), { type: "module" });
+
+    trainWorker.onmessage = (e: MessageEvent) => {
+        const msg = e.data;
+        if (msg.type === "progress") {
             const line = document.createElement("div");
-            line.textContent = result.log;
+            line.textContent = msg.result.log;
             trainLog.appendChild(line);
             trainLog.scrollTop = trainLog.scrollHeight;
-        }, trainAbort.signal);
+        } else if (msg.type === "game_update") {
+            const canvas = getOrCreateTrainCanvas(msg.individualIndex);
+            drawMiniGame(canvas, msg.points);
+            const label = canvas.parentElement?.querySelector(".train-canvas-label");
+            if (label) label.textContent = `Gen ${msg.gen} | Individual ${msg.individualIndex}`;
+        } else if (msg.type === "done") {
+            trainResult.textContent = JSON.stringify(msg.bestConfig, null, 2);
+            trainStartBtn.disabled = false;
+            trainStopBtn.disabled = true;
+            trainWorker = null;
+        } else if (msg.type === "error") {
+            trainResult.textContent = `Error: ${msg.message}`;
+            trainStartBtn.disabled = false;
+            trainStopBtn.disabled = true;
+            trainWorker = null;
+        }
+    };
 
-        trainResult.textContent = JSON.stringify(best, null, 2);
-    } catch (e) {
-        trainResult.textContent = `Error: ${e}`;
-    } finally {
+    trainWorker.onerror = (e) => {
+        trainResult.textContent = `Worker error: ${e.message}`;
         trainStartBtn.disabled = false;
         trainStopBtn.disabled = true;
-        trainAbort = null;
-    }
+        trainWorker = null;
+    };
+
+    trainWorker.postMessage({ type: "start", params, difficulty });
 });
 
 trainStopBtn?.addEventListener("click", () => {
-    trainAbort?.abort();
+    trainWorker?.postMessage({ type: "stop" });
 });
 
 // Back button
 document.getElementById("train-back")?.addEventListener("click", () => {
+    trainWorker?.postMessage({ type: "stop" });
+    trainWorker?.terminate();
+    trainWorker = null;
     trainingPanel.style.display = "none";
     modeSelect.style.display = "flex";
 });

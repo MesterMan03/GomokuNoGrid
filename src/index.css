@@ -87,3 +87,33 @@ html, body {
     font-size: 13px;
     overflow-x: auto;
 }
+
+.train-games {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.train-canvas-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.train-canvas {
+    border: 1px solid #555;
+    border-radius: 4px;
+}
+
+.train-canvas-label {
+    font-size: 11px;
+    color: #aaa;
+    font-family: monospace;
+    margin-bottom: 2px;
+}
+
+.train-form select {
+    padding: 4px;
+    font-size: 14px;
+}

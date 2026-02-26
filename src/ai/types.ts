@@ -44,8 +44,31 @@ export interface DebugPhase {
     lines: DebugLine[];
 }
 
+/** Configurable weights for the easy AI. */
+export interface EasyAIConfig {
+    [key: string]: number;
+    topK: number;
+    noiseAmount: number;
+    criticalBlockScore: number;
+    defensiveBlockScore: number;
+    offensiveWeight: number;
+    clusteringDecay: number;
+    nearbyRandomCount: number;
+}
+
+export const DEFAULT_EASY_CONFIG: EasyAIConfig = {
+    topK: 3,
+    noiseAmount: 15,
+    criticalBlockScore: 500,
+    defensiveBlockScore: 150,
+    offensiveWeight: 20,
+    clusteringDecay: 30,
+    nearbyRandomCount: 2,
+};
+
 /** Configurable weights for the medium AI evaluation. */
 export interface MediumAIConfig {
+    [key: string]: number;
     lineWeight2: number;
     lineWeight3: number;
     lineWeight4: number;
@@ -76,6 +99,12 @@ export const DEFAULT_MEDIUM_CONFIG: MediumAIConfig = {
     clusterQuickWeight: 10,
     maxCandidates: 10,
 };
+
+/** Registry entry for an evolvable AI difficulty. */
+export interface AIDefinition {
+    defaultConfig: Record<string, number>;
+    createAI(config: Record<string, number>): AI;
+}
 
 export interface AI {
     getMove(game: Game, player: Player): Promise<ScoredMove>;

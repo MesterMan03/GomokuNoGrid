@@ -1,14 +1,6 @@
-import { type AI, MoveReason, type ScoredMove } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type EasyAIConfig, DEFAULT_EASY_CONFIG } from "./types.ts";
 import type { Game, Player, Point, LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE } from "../consts.ts";
-
-const TOP_K = 3;
-const NOISE_AMOUNT = 15;
-const CRITICAL_BLOCK_SCORE = 500;
-const DEFENSIVE_BLOCK_SCORE = 150;
-const OFFENSIVE_WEIGHT = 20;
-const CLUSTERING_DECAY = 30;
-const NEARBY_RANDOM_COUNT = 2;
 
 interface Candidate {
     x: number;
@@ -22,6 +14,12 @@ function candidateKey(x: number, y: number): string {
 }
 
 export class EasyAI implements AI {
+    readonly config: EasyAIConfig;
+
+    constructor(config?: Partial<EasyAIConfig>) {
+        this.config = { ...DEFAULT_EASY_CONFIG, ...config } as EasyAIConfig;
+    }
+
     async getMove(game: Game, player: Player): Promise<ScoredMove> {
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
@@ -62,7 +60,7 @@ export class EasyAI implements AI {
         const criticalBlocks = scored.filter(m => m.reason === MoveReason.CRITICAL_BLOCK);
         if (criticalBlocks.length > 0) {
             criticalBlocks.sort((a, b) => b.score - a.score);
-            const topK = criticalBlocks.slice(0, TOP_K);
+            const topK = criticalBlocks.slice(0, this.config.topK);
             return topK[Math.floor(Math.random() * topK.length)]!;
         }
 
@@ -70,7 +68,7 @@ export class EasyAI implements AI {
         scored.sort((a, b) => b.score - a.score);
 
         // pick from top K
-        const topK = scored.slice(0, TOP_K);
+        const topK = scored.slice(0, this.config.topK);
         return topK[Math.floor(Math.random() * topK.length)]!;
     }
 
@@ -161,7 +159,7 @@ export class EasyAI implements AI {
 
     private addNearbyRandom(aiPoints: Point[], candidates: Map<string, Candidate>): void {
         for (const stone of aiPoints) {
-            for (let i = 0; i < NEARBY_RANDOM_COUNT; i++) {
+            for (let i = 0; i < this.config.nearbyRandomCount; i++) {
                 const angle = Math.random() * Math.PI * 2;
                 const dist = IDEAL_SPACING + (Math.random() - 0.5) * 10;
                 const x = stone.x / SCALE + Math.cos(angle) * dist;
@@ -182,9 +180,9 @@ export class EasyAI implements AI {
 
         // base score from move reason
         if (candidate.reason === MoveReason.CRITICAL_BLOCK) {
-            score += CRITICAL_BLOCK_SCORE;
+            score += this.config.criticalBlockScore;
         } else if (candidate.reason === MoveReason.DEFENSIVE_BLOCK) {
-            score += DEFENSIVE_BLOCK_SCORE;
+            score += this.config.defensiveBlockScore;
         }
 
         // alignment gain — bonus for being at ideal spacing from AI stones
@@ -193,7 +191,7 @@ export class EasyAI implements AI {
             const dy = stone.y - my;
             const dist = Math.sqrt(dx * dx + dy * dy) / SCALE;
             if (Math.abs(dist - IDEAL_SPACING) < 10) {
-                score += OFFENSIVE_WEIGHT;
+                score += this.config.offensiveWeight;
             }
         }
 
@@ -206,11 +204,11 @@ export class EasyAI implements AI {
             if (dist < minDist) minDist = dist;
         }
         if (minDist < Infinity) {
-            score += 10 * Math.exp(-minDist / CLUSTERING_DECAY);
+            score += 10 * Math.exp(-minDist / this.config.clusteringDecay);
         }
 
         // random noise
-        score += (Math.random() - 0.5) * 2 * NOISE_AMOUNT;
+        score += (Math.random() - 0.5) * 2 * this.config.noiseAmount;
 
         return {
             x: candidate.x,

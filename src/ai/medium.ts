@@ -29,7 +29,7 @@ export class MediumAI implements AI {
     readonly config: MediumAIConfig;
 
     constructor(config?: Partial<MediumAIConfig>) {
-        this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config };
+        this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config } as MediumAIConfig;
     }
 
     getLastDebugPhases(): DebugPhase[] {
