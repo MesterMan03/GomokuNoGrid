@@ -174,8 +174,17 @@ function draw() {
         ctx.moveTo(point1.x / SCALE, point1.y / SCALE);
         ctx.lineTo(point2.x / SCALE, point2.y / SCALE);
         ctx.stroke();
+    }
 
-        // write a big text in the middle of the screen saying which player won
+
+    // reset transform for elements that should not be affected by zoom/pan
+    ctx.setTransform(1,0,0,1,0,0);
+
+    // debug overlay (drawn on top of game, before HUD)
+    debugDrawer.draw(ctx, game, canvas.width, canvas.height);
+
+    if(game.getState() != GameState.ONGOING) {
+        // show player won text
         ctx.setTransform(1,0,0,1,0,0);
         ctx.fillStyle = "black";
         ctx.font = "48px sans-serif";
@@ -184,11 +193,7 @@ function draw() {
         ctx.fillText(text, (canvas.width - textWidth) /2, canvas.height /2);
     }
 
-    // debug overlay (drawn on top of game, before HUD)
-    debugDrawer.draw(ctx, game, canvas.width, canvas.height);
-
     // write the mouse x and y in the bottom left corner
-    ctx.setTransform(1,0,0,1,0,0);
     ctx.fillStyle = "black";
     ctx.font = "16px monospace";
     ctx.fillText(`Mouse: (${mouse.x}, ${mouse.y})`, 10, canvas.height - 10);
