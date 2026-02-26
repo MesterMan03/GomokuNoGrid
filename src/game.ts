@@ -278,7 +278,6 @@ export class Game {
             // try to find an existing group containing this neighbor with matching direction
             let matched = false;
             for (const group of groups) {
-                if (addedToGroups.has(group)) continue;
                 if (!group.stones.has(neighbor)) continue;
                 if (group.angleBucket !== bucket) continue;
 
@@ -287,6 +286,13 @@ export class Game {
                 const vy = point.y - group.originY;
                 const perp = Math.abs(vx * group.dirY - vy * group.dirX);
                 if (perp > PERPENDICULAR_TOLERANCE) continue;
+
+                // if point was already added to this group via a previous
+                // neighbor, skip without creating a duplicate group
+                if (addedToGroups.has(group)) {
+                    matched = true;
+                    break;
+                }
 
                 // add point to group
                 group.stones.add(point);
