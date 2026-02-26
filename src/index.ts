@@ -312,7 +312,7 @@ trainStartBtn?.addEventListener("click", () => {
     trainLog.innerHTML = "";
     trainResult.textContent = "Running...";
 
-    trainWorker = new Worker(new URL("./training.worker.ts", import.meta.url), { type: "module" });
+    trainWorker = new Worker(new URL("./training.worker.js", import.meta.url), { type: "module" });
 
     trainWorker.onmessage = (e: MessageEvent) => {
         const msg = e.data;
