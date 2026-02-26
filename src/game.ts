@@ -113,7 +113,7 @@ export class Game {
         this.points.push(point);
 
         // update line groups for the new stone
-        this.updateLineGroups(point);
+        this.updateLineGroups(point.player);
 
         // check for win condition
         if(this.checkWin(point)) {
@@ -172,7 +172,6 @@ export class Game {
 
                 if(perp <= PERPENDICULAR_TOLERANCE) aligned.add(candidate);
                 else console.debug("Rejected point for alignment:", candidate, "perpendicular distance:", perp);
-
             }
 
             console.debug("Aligned points:", Array.from(aligned));
@@ -250,76 +249,119 @@ export class Game {
         return nearest[0]![1] <= MAX_PLACEMENT_DISTANCE;
     }
 
-    private updateLineGroups(point: Point): void {
-        const player = point.player;
+    private updateLineGroups(player: Player): void {
         const tree = player === 0 ? this.tree0 : this.tree1;
+        const points = this.points.filter(p => p.player === player);
         const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
 
-        const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
-            .filter(([p]) => p !== point);
+        // due to line groups being very fragile and complex, simply rebuild all groups from scratch for the affected player after each move
+        groups.length = 0;
 
-        const addedToGroups = new Set<LineGroup>();
+        for(const point of points) {
+            const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
+                .filter(([p]) => {
+                    if(p === point) return false;
 
-        for (const [neighbor] of nearby) {
-            const dx = neighbor.x - point.x;
-            const dy = neighbor.y - point.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            if (len <= EPSILON) continue;
+                    // don't consider neighbors that are already in the same group as the current point to avoid creating duplicate groups
+                    for(const group of groups) {
+                        if(group.stones.has(point) && group.stones.has(p)) {
+                            return false;
+                        }
+                    }
 
-            let ux = dx / len;
-            let uy = dy / len;
+                    return true;
+                });
 
-            // canonicalize direction to [0, π)
-            let angle = Math.atan2(uy, ux);
-            if (angle < 0) { angle += Math.PI; ux = -ux; uy = -uy; }
-            else if (angle >= Math.PI) { angle -= Math.PI; ux = -ux; uy = -uy; }
-            const bucket = Math.round(angle / WIN_ANGLE_STEP);
+            for (const [neighbor] of nearby) {
+                const dx = neighbor.x - point.x;
+                const dy = neighbor.y - point.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len <= EPSILON) continue;
+                if (len > WIN_D_MAX) continue; // don't create line groups with distant neighbors to limit the number of groups
 
-            // try to find an existing group containing this neighbor with matching direction
-            let matched = false;
-            for (const group of groups) {
-                if (!group.stones.has(neighbor)) continue;
-                if (group.angleBucket !== bucket) continue;
+                let ux = dx / len;
+                let uy = dy / len;
 
-                // check perpendicular distance of point to group's line
-                const vx = point.x - group.originX;
-                const vy = point.y - group.originY;
-                const perp = Math.abs(vx * group.dirY - vy * group.dirX);
-                if (perp > PERPENDICULAR_TOLERANCE) continue;
+                // canonicalize direction to [0, π)
+                let angle = Math.atan2(uy, ux);
+                if (angle < 0) {
+                    angle += Math.PI;
+                    ux = -ux;
+                    uy = -uy;
+                } else if (angle >= Math.PI) {
+                    angle -= Math.PI;
+                    ux = -ux;
+                    uy = -uy;
+                }
+                const bucket = Math.round(angle / WIN_ANGLE_STEP);
 
-                // if point was already added to this group via a previous
-                // neighbor, skip without creating a duplicate group
-                if (addedToGroups.has(group)) {
-                    matched = true;
-                    break;
+                // find every other point collinear to the current point and neighbor
+                const collinear = new Set<Point>();
+                collinear.add(point);
+                collinear.add(neighbor);
+
+                for (const [candidate] of nearby) {
+                    if (candidate === neighbor) continue;
+
+                    const vx = candidate.x - point.x;
+                    const vy = candidate.y - point.y;
+
+                    // perpendicular distance using cross product
+                    const perp = Math.abs(vx * uy - vy * ux);
+
+                    if (perp <= PERPENDICULAR_TOLERANCE) collinear.add(candidate);
                 }
 
-                // add point to group
-                group.stones.add(point);
-                const proj = vx * group.dirX + vy * group.dirY;
-                const idx = group.projections.findIndex(p => p > proj);
-                if (idx === -1) group.projections.push(proj);
-                else group.projections.splice(idx, 0, proj);
+                // create a projection of the collinear points
+                const projections = new Array<{ point: Point; proj: number }>();
+                for (const p of collinear) {
+                    const tx = p.x - point.x;
+                    const ty = p.y - point.y;
+                    const proj = tx * ux + ty * uy; // dot product
+                    projections.push({ point: p, proj });
+                }
 
-                addedToGroups.add(group);
-                matched = true;
-                break;
-            }
+                // sort projections in ascending order
+                projections.sort((a, b) => a.proj - b.proj);
 
-            if (!matched) {
-                // create new line group with point and neighbor
-                const proj = dx * ux + dy * uy;
-                const newGroup: LineGroup = {
-                    dirX: ux,
-                    dirY: uy,
-                    angleBucket: bucket,
-                    originX: point.x,
-                    originY: point.y,
-                    projections: [0, proj].sort((a, b) => a - b),
-                    stones: new Set([point, neighbor]),
-                };
-                groups.push(newGroup);
-                addedToGroups.add(newGroup);
+                // find all points on this line that are close enough to be considered a group
+                const groupsToCreate: Point[][] = [];
+                const potentialGroup = new Set<Point>();
+                for(let i = 0; i < projections.length - 1; i++) {
+                    const current = projections[i]!;
+                    const next = projections[i + 1]!;
+                    if(next.proj - current.proj <= WIN_D_MAX) {
+                        potentialGroup.add(current.point);
+                        potentialGroup.add(next.point);
+                    } else {
+                        // create the new group and reset for the next segment
+                        potentialGroup.add(current.point);
+                        if(potentialGroup.size >= 2) {
+                            groupsToCreate.push(Array.from(potentialGroup))
+                        }
+                        potentialGroup.clear();
+                    }
+                }
+
+                if(potentialGroup.size >= 2) {
+                    groupsToCreate.push(Array.from(potentialGroup));
+                }
+                for(const groupPoints of groupsToCreate) {
+                    const group: LineGroup = {
+                        dirX: ux,
+                        dirY: uy,
+                        angleBucket: bucket,
+                        originX: groupPoints[0]!.x,
+                        originY: groupPoints[0]!.y,
+                        projections: groupPoints.map(p => {
+                            const tx = p.x - groupPoints[0]!.x;
+                            const ty = p.y - groupPoints[0]!.y;
+                            return tx * ux + ty * uy; // dot product
+                        }).sort((a, b) => a - b),
+                        stones: new Set(groupPoints),
+                    }
+                    groups.push(group);
+                }
             }
         }
     }

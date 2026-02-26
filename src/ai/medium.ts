@@ -320,6 +320,8 @@ export class MediumAI implements AI {
         const opponent: Player = player === 0 ? 1 : 0;
         const candidateMap = new Map<string, Candidate>();
 
+        console.time("Candidate Generation");
+
         // offensive extensions (own groups, size ≥ 2)
         this.addLineExtensions(game.getLineGroups(player), candidateMap);
 
@@ -330,6 +332,8 @@ export class MediumAI implements AI {
         if (candidateMap.size < this.config.maxCandidates) {
             this.addTacticalNeighbors(game.getPlayerPoints(player), candidateMap);
         }
+
+        console.timeEnd("Candidate Generation");
 
         return [...candidateMap.values()].filter(c => game.isValidMove(c.x, c.y));
     }

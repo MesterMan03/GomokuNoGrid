@@ -1,12 +1,5 @@
 import type { Game, Player } from "../game.ts";
 
-export enum Difficulty {
-    EASY = "easy",
-    NORMAL = "normal",
-    HARD = "hard",
-    INSANE = "insane",
-}
-
 export enum MoveReason {
     CRITICAL_BLOCK = "critical_block",
     DEFENSIVE_BLOCK = "defensive_block",
@@ -57,13 +50,13 @@ export interface EasyAIConfig {
 }
 
 export const DEFAULT_EASY_CONFIG: EasyAIConfig = {
-    topK: 3,
-    noiseAmount: 15,
-    criticalBlockScore: 500,
-    defensiveBlockScore: 150,
-    offensiveWeight: 20,
-    clusteringDecay: 30,
-    nearbyRandomCount: 2,
+    topK: 6,
+    noiseAmount: 19,
+    criticalBlockScore: 661,
+    defensiveBlockScore: 161,
+    offensiveWeight: 10,
+    clusteringDecay: 22,
+    nearbyRandomCount: 2
 };
 
 /** Configurable weights for the medium AI evaluation. */
@@ -86,18 +79,18 @@ export interface MediumAIConfig {
 
 export const DEFAULT_MEDIUM_CONFIG: MediumAIConfig = {
     lineWeight2: 15,
-    lineWeight3: 200,
-    lineWeight4: 5000,
-    openFactor: 3.0,
-    opponentBias: 1.3,
-    clusteringDecay: 30,
-    clusteringWeight: 5,
+    lineWeight3: 247.31066159253209,
+    lineWeight4: 5490.300584042243,
+    openFactor: 3.4488843325834573,
+    opponentBias: 1.7979490343915925,
+    clusteringDecay: 42.59809142273841,
+    clusteringWeight: 4.623002090663807,
     criticalBlockScore: 500,
-    defensiveBlockScore: 150,
+    defensiveBlockScore: 128.23379833371035,
     offensiveExtensionScore: 50,
     threatSizeWeight: 30,
-    clusterQuickWeight: 10,
-    maxCandidates: 10,
+    clusterQuickWeight: 5.580287440280992,
+    maxCandidates: 11,
 };
 
 /** Registry entry for an evolvable AI difficulty. */
