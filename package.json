@@ -16,6 +16,6 @@
   },
   "scripts": {
     "dev": "bun run src/index.html",
-    "build": "rm -rf dist && bun build src/index.html --outdir=dist --minify --sourcemap=external"
+    "build": "rm -rf dist && bun build src/index.html src/training.worker.ts --outdir=dist --minify --sourcemap=external --splitting"
   }
 }
