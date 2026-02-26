@@ -100,12 +100,23 @@ export class MediumAI implements AI {
             const placed = child.addMove(candidate.x, candidate.y, player);
             if (!placed) continue;
 
-            const score = this.minimax(child, MINIMAX_DEPTH, -Infinity, Infinity, false, player);
+            // immediate win check — skip remaining candidates
+            const childState = child.getState();
+            const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+            if (childState === aiWinState) {
+                minimaxResults.push({ candidate, score: WIN_SCORE });
+                bestScore = WIN_SCORE;
+                bestMove = candidate;
+                break;
+            }
+
+            const score = this.minimax(child, MINIMAX_DEPTH, -Infinity, Infinity, false, player, aiWinState);
             minimaxResults.push({ candidate, score });
 
             if (score > bestScore) {
                 bestScore = score;
                 bestMove = candidate;
+                if (bestScore >= WIN_SCORE) break; // guaranteed win found deeper — stop searching
             }
         }
 
@@ -150,6 +161,12 @@ export class MediumAI implements AI {
 
     // ── minimax with alpha-beta ──────────────────────────────────────────
 
+    private terminalScore(state: Game, aiWin: GameState): number | null {
+        const gs = state.getState();
+        if (gs === GameState.ONGOING) return null;
+        return gs === aiWin ? WIN_SCORE : -WIN_SCORE;
+    }
+
     private minimax(
         state: Game,
         depth: number,
@@ -157,13 +174,11 @@ export class MediumAI implements AI {
         beta: number,
         maximizingPlayer: boolean,
         aiPlayer: Player,
+        aiWin: GameState,
     ): number {
         // terminal or leaf
-        const gs = state.getState();
-        if (gs !== GameState.ONGOING) {
-            const aiWin = aiPlayer === 0 ? GameState.WIN_0 : GameState.WIN_1;
-            return gs === aiWin ? WIN_SCORE : -WIN_SCORE;
-        }
+        const terminal = this.terminalScore(state, aiWin);
+        if (terminal !== null) return terminal;
         if (depth === 0) {
             return this.evaluate(state, aiPlayer);
         }
@@ -186,7 +201,10 @@ export class MediumAI implements AI {
             for (const move of topMoves) {
                 const child = state.clone();
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
-                const evalScore = this.minimax(child, depth - 1, alpha, beta, false, aiPlayer);
+
+                const evalScore = this.terminalScore(child, aiWin)
+                    ?? this.minimax(child, depth - 1, alpha, beta, false, aiPlayer, aiWin);
+
                 maxEval = Math.max(maxEval, evalScore);
                 alpha = Math.max(alpha, evalScore);
                 if (beta <= alpha) break;
@@ -197,7 +215,10 @@ export class MediumAI implements AI {
             for (const move of topMoves) {
                 const child = state.clone();
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
-                const evalScore = this.minimax(child, depth - 1, alpha, beta, true, aiPlayer);
+
+                const evalScore = this.terminalScore(child, aiWin)
+                    ?? this.minimax(child, depth - 1, alpha, beta, true, aiPlayer, aiWin);
+
                 minEval = Math.min(minEval, evalScore);
                 beta = Math.min(beta, evalScore);
                 if (beta <= alpha) break;
