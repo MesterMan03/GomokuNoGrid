@@ -86,6 +86,9 @@ async function playMatch(ai0: MediumAI, ai1: MediumAI, maxMoves: number): Promis
     return Math.max(-1, Math.min(1, eval0 / 1000));
 }
 
+const MIN_CONFIG_VALUE = 0.1;
+const MIN_CANDIDATES = 3;
+
 /** Mutate a config by randomly perturbing each numeric field. */
 function mutateConfig(
     base: MediumAIConfig,
@@ -98,11 +101,10 @@ function mutateConfig(
         if (Math.random() < rate) {
             const val = result[key] as number;
             const delta = val * strength * (Math.random() * 2 - 1);
-            (result as Record<string, number>)[key] = Math.max(0.1, val + delta);
+            (result as Record<string, number>)[key] = Math.max(MIN_CONFIG_VALUE, val + delta);
         }
     }
-    // clamp maxCandidates to integer ≥ 3
-    result.maxCandidates = Math.max(3, Math.round(result.maxCandidates));
+    result.maxCandidates = Math.max(MIN_CANDIDATES, Math.round(result.maxCandidates));
     return result;
 }
 
@@ -115,7 +117,7 @@ function crossover(a: MediumAIConfig, b: MediumAIConfig): MediumAIConfig {
             (result as Record<string, number>)[key] = b[key] as number;
         }
     }
-    result.maxCandidates = Math.max(3, Math.round(result.maxCandidates));
+    result.maxCandidates = Math.max(MIN_CANDIDATES, Math.round(result.maxCandidates));
     return result;
 }
 
