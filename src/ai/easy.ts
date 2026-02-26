@@ -17,6 +17,8 @@ export class EasyAI implements AI {
     readonly config: EasyAIConfig;
 
     constructor(config?: Partial<EasyAIConfig>) {
+        // Cast needed: Partial<> with index signature produces number|undefined,
+        // but the spread over defaults guarantees all values are present.
         this.config = { ...DEFAULT_EASY_CONFIG, ...config } as EasyAIConfig;
     }
 

@@ -75,8 +75,13 @@ function evaluatePosition(game: Game, player: Player): number {
         if (projections.length < 2) continue;
         let maxRun = 1, run = 1;
         for (let i = 0; i < projections.length - 1; i++) {
-            if (projections[i + 1]! - projections[i]! <= WIN_D_MAX) { run++; maxRun = Math.max(maxRun, run); }
-            else run = 1;
+            const delta = projections[i + 1]! - projections[i]!;
+            if (delta <= WIN_D_MAX) {
+                run++;
+                maxRun = Math.max(maxRun, run);
+            } else {
+                run = 1;
+            }
         }
         if (maxRun >= 5) return 10000;
         if (maxRun >= 4) score += 300;
@@ -89,8 +94,13 @@ function evaluatePosition(game: Game, player: Player): number {
         if (projections.length < 2) continue;
         let maxRun = 1, run = 1;
         for (let i = 0; i < projections.length - 1; i++) {
-            if (projections[i + 1]! - projections[i]! <= WIN_D_MAX) { run++; maxRun = Math.max(maxRun, run); }
-            else run = 1;
+            const delta = projections[i + 1]! - projections[i]!;
+            if (delta <= WIN_D_MAX) {
+                run++;
+                maxRun = Math.max(maxRun, run);
+            } else {
+                run = 1;
+            }
         }
         if (maxRun >= 5) return -10000;
         if (maxRun >= 4) score -= 300;

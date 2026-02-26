@@ -29,6 +29,8 @@ export class MediumAI implements AI {
     readonly config: MediumAIConfig;
 
     constructor(config?: Partial<MediumAIConfig>) {
+        // Cast needed: Partial<> with index signature produces number|undefined,
+        // but the spread over defaults guarantees all values are present.
         this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config } as MediumAIConfig;
     }
 
