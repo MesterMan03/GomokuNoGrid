@@ -1,6 +1,12 @@
 import type { Game } from "./game.ts";
 import type { DebugPhase } from "./ai/types.ts";
-import { SCALE } from "./consts.ts";
+import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "./consts.ts";
+
+export interface DebugSettings {
+    showLineGroups: boolean;
+    showWinEvaluation: boolean;
+    showAIPhases: boolean;
+}
 
 export class DebugDrawer {
     private _enabled = false;
@@ -8,6 +14,12 @@ export class DebugDrawer {
     private phaseQueue: DebugPhase[] = [];
     private phaseIndex = -1;
     private stepResolve: (() => void) | null = null;
+
+    readonly settings: DebugSettings = {
+        showLineGroups: true,
+        showWinEvaluation: false,
+        showAIPhases: true,
+    };
 
     get enabled(): boolean { return this._enabled; }
 
@@ -20,16 +32,16 @@ export class DebugDrawer {
         }
     }
 
+    toggleSetting(key: keyof DebugSettings): void {
+        this.settings[key] = !this.settings[key];
+    }
+
     get isStepping(): boolean {
         return this.stepResolve !== null;
     }
 
-    /**
-     * Load phases and step through them one at a time.
-     * Resolves when the user has stepped past the last phase.
-     */
     async stepThroughPhases(phases: DebugPhase[]): Promise<void> {
-        if (!this._enabled || phases.length === 0) return;
+        if (!this._enabled || !this.settings.showAIPhases || phases.length === 0) return;
 
         this.phaseQueue = phases;
 
@@ -47,10 +59,6 @@ export class DebugDrawer {
         this.phaseIndex = -1;
     }
 
-    /**
-     * Advance to the next phase. Called on key press.
-     * Returns true if a step was consumed.
-     */
     advance(): boolean {
         if (!this.stepResolve) return false;
         const resolve = this.stepResolve;
@@ -60,17 +68,32 @@ export class DebugDrawer {
     }
 
     /**
-     * Draw debug overlay on the canvas.
-     * Must be called inside the draw loop while world-coordinate transforms are active.
+     * Draw debug overlay. World-space elements use the current ctx transform (set by renderer).
+     * Screen-space HUD is drawn after resetting the transform.
      */
-    draw(ctx: CanvasRenderingContext2D, game: Game, canvasWidth: number, canvasHeight: number): void {
+    draw(
+        ctx: CanvasRenderingContext2D,
+        game: Game,
+        canvasWidth: number,
+        canvasHeight: number,
+        translateX: number,
+        translateY: number,
+        viewScale: number,
+    ): void {
         if (!this._enabled) return;
 
-        // Always-on overlay: line groups for both players
-        this.drawLineGroups(ctx, game, 0, "rgba(0, 100, 255, 0.5)");
-        this.drawLineGroups(ctx, game, 1, "rgba(255, 50, 50, 0.5)");
+        // ── World-space overlays (transform is already set by renderer) ──
 
-        // Draw current debug phase markers and lines
+        if (this.settings.showLineGroups) {
+            this.drawLineGroups(ctx, game, 0, "rgba(0, 100, 255, 0.5)");
+            this.drawLineGroups(ctx, game, 1, "rgba(255, 50, 50, 0.5)");
+        }
+
+        if (this.settings.showWinEvaluation) {
+            this.drawWinEvaluation(ctx, game);
+        }
+
+        // Draw current debug phase markers and lines (world coordinates)
         if (this.currentPhase) {
             for (const line of this.currentPhase.lines) {
                 ctx.strokeStyle = line.color;
@@ -101,26 +124,26 @@ export class DebugDrawer {
             }
         }
 
-        // HUD in screen coordinates
+        // ── Screen-space HUD ──
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-        const hudHeight = this.currentPhase ? 60 : 30;
+        const lines: string[] = [];
+        lines.push(`[DEBUG]  \`  toggle  |  N  step  |  1  linegroups: ${this.settings.showLineGroups ? "ON" : "OFF"}  |  2  win eval: ${this.settings.showWinEvaluation ? "ON" : "OFF"}  |  3  AI phases: ${this.settings.showAIPhases ? "ON" : "OFF"}`);
+        if (this.currentPhase) {
+            lines.push(`Phase ${this.phaseIndex + 1}/${this.phaseQueue.length}: ${this.currentPhase.title}`);
+            lines.push(this.currentPhase.description);
+        }
+
+        const lineHeight = 18;
+        const hudHeight = lines.length * lineHeight + 6;
         ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
         ctx.fillRect(0, 0, canvasWidth, hudHeight);
 
-        ctx.fillStyle = "#00ff00";
-        ctx.font = "14px monospace";
-        ctx.fillText("[DEBUG ON]  `  toggle  |  N  advance step", 10, 20);
-
-        if (this.currentPhase) {
-            ctx.fillStyle = "#ffff00";
-            ctx.fillText(
-                `Phase ${this.phaseIndex + 1}/${this.phaseQueue.length}: ${this.currentPhase.title}`,
-                10, 38,
-            );
-            ctx.fillStyle = "#cccccc";
-            ctx.fillText(this.currentPhase.description, 10, 54);
+        ctx.font = "13px monospace";
+        for (let i = 0; i < lines.length; i++) {
+            ctx.fillStyle = i === 0 ? "#00ff00" : i === 1 ? "#ffff00" : "#cccccc";
+            ctx.fillText(lines[i]!, 10, lineHeight * (i + 1));
         }
 
         ctx.restore();
@@ -146,7 +169,6 @@ export class DebugDrawer {
             ctx.lineTo(x2, y2);
             ctx.stroke();
 
-            // Label with group size
             const mx = (x1 + x2) / 2;
             const my = (y1 + y2) / 2;
             ctx.fillStyle = color;
@@ -154,5 +176,74 @@ export class DebugDrawer {
             ctx.fillText(`${group.stones.size}`, mx + 5, my - 5);
         }
         ctx.lineWidth = 1;
+    }
+
+    private drawWinEvaluation(ctx: CanvasRenderingContext2D, game: Game): void {
+        for (const player of [0, 1] as const) {
+            const color = player === 0 ? "rgba(0, 0, 200, 0.8)" : "rgba(200, 0, 0, 0.8)";
+            const groups = game.getLineGroups(player);
+
+            for (const group of groups) {
+                const projections = group.projections;
+                if (projections.length < 2) continue;
+
+                // count longest consecutive run
+                let maxRun = 1;
+                let currentRun = 1;
+                for (let i = 0; i < projections.length - 1; i++) {
+                    const delta = projections[i + 1]! - projections[i]!;
+                    if (delta <= WIN_D_MAX) {
+                        currentRun++;
+                        maxRun = Math.max(maxRun, currentRun);
+                    } else {
+                        currentRun = 1;
+                    }
+                }
+                if (maxRun < 2) continue;
+
+                // check open ends
+                const minProj = projections[0]!;
+                const maxProj = projections[projections.length - 1]!;
+                const spacing = IDEAL_SPACING * SCALE;
+
+                const ext1X = (group.originX + group.dirX * (minProj - spacing)) / SCALE;
+                const ext1Y = (group.originY + group.dirY * (minProj - spacing)) / SCALE;
+                const ext2X = (group.originX + group.dirX * (maxProj + spacing)) / SCALE;
+                const ext2Y = (group.originY + group.dirY * (maxProj + spacing)) / SCALE;
+
+                let openEnds = 0;
+                if (game.isValidMove(ext1X, ext1Y)) openEnds++;
+                if (game.isValidMove(ext2X, ext2Y)) openEnds++;
+
+                // draw open end indicators
+                ctx.globalAlpha = 0.5;
+                if (game.isValidMove(ext1X, ext1Y)) {
+                    ctx.strokeStyle = "#00ff00";
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(ext1X, ext1Y, 4, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+                if (game.isValidMove(ext2X, ext2Y)) {
+                    ctx.strokeStyle = "#00ff00";
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(ext2X, ext2Y, 4, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1.0;
+
+                // label at midpoint with run length, open ends, and threat level
+                const mx = (group.originX + group.dirX * ((minProj + maxProj) / 2)) / SCALE;
+                const my = (group.originY + group.dirY * ((minProj + maxProj) / 2)) / SCALE;
+
+                const threatLevel = maxRun >= 5 ? "WIN" : maxRun >= 4 ? "CRITICAL" : maxRun >= 3 ? "THREAT" : "low";
+                const label = `run=${maxRun} open=${openEnds} [${threatLevel}]`;
+
+                ctx.fillStyle = color;
+                ctx.font = "9px monospace";
+                ctx.fillText(label, mx + 8, my + 12);
+            }
+        }
     }
 }

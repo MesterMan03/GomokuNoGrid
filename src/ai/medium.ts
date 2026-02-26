@@ -1,18 +1,9 @@
-import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker, type MediumAIConfig, DEFAULT_MEDIUM_CONFIG } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 
-const MAX_CANDIDATES = 10;
 const MINIMAX_DEPTH = 2; // root move already simulated → 2 more plies = 3-ply total
 const WIN_SCORE = 100_000;
-
-const LINE_WEIGHTS: Record<number, number> = {
-    2: 15,
-    3: 200,
-    4: 5000,
-};
-
-const CLUSTERING_DECAY = 30;
 
 interface Candidate {
     x: number;
@@ -35,6 +26,11 @@ const REASON_COLORS: Record<MoveReason, string> = {
 
 export class MediumAI implements AI {
     private debugPhases: DebugPhase[] = [];
+    readonly config: MediumAIConfig;
+
+    constructor(config?: Partial<MediumAIConfig>) {
+        this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config };
+    }
 
     getLastDebugPhases(): DebugPhase[] {
         return this.debugPhases;
@@ -77,7 +73,7 @@ export class MediumAI implements AI {
         allCandidates.sort(
             (a, b) => this.quickScore(b, game, player) - this.quickScore(a, game, player),
         );
-        const topCandidates = allCandidates.slice(0, MAX_CANDIDATES);
+        const topCandidates = allCandidates.slice(0, this.config.maxCandidates);
 
         // Debug phase 2: Top candidates with scores
         this.debugPhases.push({
@@ -181,7 +177,7 @@ export class MediumAI implements AI {
         moves.sort(
             (a, b) => this.quickScore(b, state, currentPlayer) - this.quickScore(a, state, currentPlayer),
         );
-        const topMoves = moves.slice(0, MAX_CANDIDATES);
+        const topMoves = moves.slice(0, this.config.maxCandidates);
 
         if (maximizingPlayer) {
             let maxEval = -Infinity;
@@ -210,7 +206,7 @@ export class MediumAI implements AI {
 
     // ── evaluation ───────────────────────────────────────────────────────
 
-    private evaluate(state: Game, aiPlayer: Player): number {
+    evaluate(state: Game, aiPlayer: Player): number {
         const opponent: Player = aiPlayer === 0 ? 1 : 0;
         let score = 0;
 
@@ -219,7 +215,7 @@ export class MediumAI implements AI {
             score += this.lineScore(group, state);
         }
         for (const group of state.getLineGroups(opponent)) {
-            score -= this.lineScore(group, state) * 1.3;
+            score -= this.lineScore(group, state) * this.config.opponentBias;
         }
 
         // positional clustering bonus
@@ -235,7 +231,7 @@ export class MediumAI implements AI {
                     pairs++;
                 }
             }
-            score += 5 * Math.exp(-(totalDist / pairs) / CLUSTERING_DECAY);
+            score += this.config.clusteringWeight * Math.exp(-(totalDist / pairs) / this.config.clusteringDecay);
         }
 
         return score;
@@ -277,8 +273,13 @@ export class MediumAI implements AI {
 
         if (openEnds === 0) return 0; // dead line – no value
 
-        const weight = LINE_WEIGHTS[maxRun] ?? maxRun * 5;
-        const openFactor = openEnds === 2 ? 3.0 : 1.0;
+        const weights: Record<number, number> = {
+            2: this.config.lineWeight2,
+            3: this.config.lineWeight3,
+            4: this.config.lineWeight4,
+        };
+        const weight = weights[maxRun] ?? maxRun * 5;
+        const openFactor = openEnds === 2 ? this.config.openFactor : 1.0;
         return weight * openFactor;
     }
 
@@ -287,11 +288,11 @@ export class MediumAI implements AI {
     private quickScore(candidate: Candidate, game: Game, player: Player): number {
         let score = 0;
 
-        if (candidate.reason === MoveReason.CRITICAL_BLOCK) score += 500;
-        else if (candidate.reason === MoveReason.DEFENSIVE_BLOCK) score += 150;
-        else if (candidate.reason === MoveReason.OFFENSIVE_EXTENSION) score += 50;
+        if (candidate.reason === MoveReason.CRITICAL_BLOCK) score += this.config.criticalBlockScore;
+        else if (candidate.reason === MoveReason.DEFENSIVE_BLOCK) score += this.config.defensiveBlockScore;
+        else if (candidate.reason === MoveReason.OFFENSIVE_EXTENSION) score += this.config.offensiveExtensionScore;
 
-        score += candidate.threatSize * 30;
+        score += candidate.threatSize * this.config.threatSizeWeight;
 
         // clustering to own stones
         const points = game.getPlayerPoints(player);
@@ -305,7 +306,7 @@ export class MediumAI implements AI {
             if (dist < minDist) minDist = dist;
         }
         if (minDist < Infinity) {
-            score += 10 * Math.exp(-minDist / CLUSTERING_DECAY);
+            score += this.config.clusterQuickWeight * Math.exp(-minDist / this.config.clusteringDecay);
         }
 
         return score;
@@ -324,7 +325,7 @@ export class MediumAI implements AI {
         this.addBlockingMoves(game.getLineGroups(opponent), candidateMap);
 
         // tactical neighbors when too few candidates
-        if (candidateMap.size < MAX_CANDIDATES) {
+        if (candidateMap.size < this.config.maxCandidates) {
             this.addTacticalNeighbors(game.getPlayerPoints(player), candidateMap);
         }
 
