@@ -67,14 +67,41 @@ export class MinimaxWorkerPool {
         candidate: { x: number; y: number },
         player: 0 | 1,
     ): Promise<CandidateResult> {
-        return new Promise(resolve => {
-            const handler = (e: MessageEvent) => {
-                if (e.data.type === "result" && e.data.id === id) {
-                    worker.removeEventListener("message", handler);
-                    resolve({ score: e.data.score, immediateWin: e.data.immediateWin });
+        return new Promise((resolve, reject) => {
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+            const cleanup = () => {
+                worker.removeEventListener("message", messageHandler);
+                worker.removeEventListener("error", errorHandler);
+                if (timeoutId !== undefined) clearTimeout(timeoutId);
+            };
+
+            const messageHandler = (e: MessageEvent) => {
+                const data = e.data;
+                if (!data || data.id !== id) return;
+                if (data.type === "result") {
+                    cleanup();
+                    resolve({ score: data.score, immediateWin: data.immediateWin });
+                } else if (data.type === "error") {
+                    cleanup();
+                    reject(new Error(typeof data.error === "string" ? data.error : "Minimax worker reported an error"));
                 }
             };
-            worker.addEventListener("message", handler);
+
+            const errorHandler = (event: ErrorEvent) => {
+                cleanup();
+                reject(event.error instanceof Error ? event.error : new Error(event.message || "Minimax worker error"));
+            };
+
+            worker.addEventListener("message", messageHandler);
+            worker.addEventListener("error", errorHandler);
+
+            // Timeout to prevent indefinite hangs if the worker never responds
+            timeoutId = setTimeout(() => {
+                cleanup();
+                reject(new Error(`Minimax worker timed out for candidate id=${id}`));
+            }, 30_000);
+
             worker.postMessage({ type: "evaluate", id, points, candidate, player });
         });
     }

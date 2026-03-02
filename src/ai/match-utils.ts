@@ -61,7 +61,29 @@ export async function playMatch(
     game.addMove(400, 400, 0);
 
     const firstReply = await ai1.getMove(game, 1);
-    game.addMove(firstReply.x, firstReply.y, 1);
+    if (!game.addMove(firstReply.x, firstReply.y, 1)) {
+        // First reply failed — try random fallback placement
+        let placed = false;
+        const points = game.getPoints();
+        for (let attempt = 0; attempt < 50; attempt++) {
+            const target = points[Math.floor(Math.random() * points.length)]!;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = IDEAL_SPACING + Math.random() * 15;
+            const fx = target.x / SCALE + Math.cos(angle) * dist;
+            const fy = target.y / SCALE + Math.sin(angle) * dist;
+            if (game.addMove(fx, fy, 1)) {
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) {
+            onUpdate?.(game.getPoints(), game.getState());
+            const state = game.getState();
+            if (state === GameState.WIN_0) return 1;
+            if (state === GameState.WIN_1) return -1;
+            return Math.max(-1, Math.min(1, evaluatePosition(game, 0) / 1000));
+        }
+    }
 
     let currentPlayer: Player = 0;
     for (let moveNum = 2; moveNum < maxMoves; moveNum++) {

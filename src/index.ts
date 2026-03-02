@@ -323,13 +323,26 @@ function drawMiniGame(canvas: HTMLCanvasElement, points: Array<{ x: number; y: n
 }
 
 trainStartBtn?.addEventListener("click", async () => {
+    const parseIntParam = (inputId: string, defaultValue: number): number => {
+        const raw = (document.getElementById(inputId) as HTMLInputElement).value.trim();
+        if (raw === "") return defaultValue;
+        const parsed = parseInt(raw, 10);
+        return Number.isNaN(parsed) ? defaultValue : parsed;
+    };
+    const parseFloatParam = (inputId: string, defaultValue: number): number => {
+        const raw = (document.getElementById(inputId) as HTMLInputElement).value.trim();
+        if (raw === "") return defaultValue;
+        const parsed = parseFloat(raw);
+        return Number.isNaN(parsed) ? defaultValue : parsed;
+    };
+
     const params = {
-        simsPerBatch: parseInt((document.getElementById("train-sims") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.simsPerBatch,
-        batches: parseInt((document.getElementById("train-batches") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.batches,
-        startingMoves: parseInt((document.getElementById("train-start-moves") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.startingMoves,
-        extraMovesPerGen: parseInt((document.getElementById("train-extra-moves") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.extraMovesPerGen,
-        mutationRate: parseFloat((document.getElementById("train-mutation-rate") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.mutationRate,
-        mutationStrength: parseFloat((document.getElementById("train-mutation-strength") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.mutationStrength,
+        simsPerBatch: parseIntParam("train-sims", DEFAULT_EVOLUTION_PARAMS.simsPerBatch),
+        batches: parseIntParam("train-batches", DEFAULT_EVOLUTION_PARAMS.batches),
+        startingMoves: parseIntParam("train-start-moves", DEFAULT_EVOLUTION_PARAMS.startingMoves),
+        extraMovesPerGen: parseIntParam("train-extra-moves", DEFAULT_EVOLUTION_PARAMS.extraMovesPerGen),
+        mutationRate: parseFloatParam("train-mutation-rate", DEFAULT_EVOLUTION_PARAMS.mutationRate),
+        mutationStrength: parseFloatParam("train-mutation-strength", DEFAULT_EVOLUTION_PARAMS.mutationStrength),
         eliteCount: DEFAULT_EVOLUTION_PARAMS.eliteCount,
         populationSize: DEFAULT_EVOLUTION_PARAMS.populationSize,
     };
@@ -381,15 +394,11 @@ trainStartBtn?.addEventListener("click", async () => {
 
 trainStopBtn?.addEventListener("click", () => {
     trainAbort?.abort();
-    matchPool?.terminate();
-    matchPool = null;
 });
 
 // Back button
 document.getElementById("train-back")?.addEventListener("click", () => {
     trainAbort?.abort();
-    matchPool?.terminate();
-    matchPool = null;
     trainingPanel.style.display = "none";
     modeSelect.style.display = "flex";
 });

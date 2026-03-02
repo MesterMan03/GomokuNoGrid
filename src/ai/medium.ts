@@ -228,9 +228,11 @@ export class MediumAI implements AI {
 
         if (maximizingPlayer) {
             let maxEval = -Infinity;
+            let anyExplored = false;
             for (const move of topMoves) {
                 const child = state.clone();
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
+                anyExplored = true;
 
                 const evalScore = this.terminalScore(child, aiWin)
                     ?? this.minimax(child, depth - 1, alpha, beta, false, aiPlayer, aiWin);
@@ -239,12 +241,14 @@ export class MediumAI implements AI {
                 alpha = Math.max(alpha, evalScore);
                 if (beta <= alpha) break;
             }
-            return maxEval;
+            return anyExplored ? maxEval : this.evaluate(state, aiPlayer);
         } else {
             let minEval = Infinity;
+            let anyExplored = false;
             for (const move of topMoves) {
                 const child = state.clone();
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
+                anyExplored = true;
 
                 const evalScore = this.terminalScore(child, aiWin)
                     ?? this.minimax(child, depth - 1, alpha, beta, true, aiPlayer, aiWin);
@@ -253,7 +257,7 @@ export class MediumAI implements AI {
                 beta = Math.min(beta, evalScore);
                 if (beta <= alpha) break;
             }
-            return minEval;
+            return anyExplored ? minEval : this.evaluate(state, aiPlayer);
         }
     }
 

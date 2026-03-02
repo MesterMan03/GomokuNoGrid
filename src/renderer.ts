@@ -49,6 +49,7 @@ export class Renderer {
 
         // draw placement indicator
         const iCtx = this.indicatorCtx;
+        iCtx.clearRect(0, 0, this.indicatorCanvas.width, this.indicatorCanvas.height);
         iCtx.fillStyle = "aqua";
         for (const point of points) {
             iCtx.beginPath();
