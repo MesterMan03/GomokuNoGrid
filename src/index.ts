@@ -267,6 +267,8 @@ let aivaiAutoPlay = false;
 let aivaiAutoTimer: ReturnType<typeof setTimeout> | null = null;
 let aivaiMoveCount = 0;
 
+const AIVAI_AUTO_DELAY_MS = 50;
+
 function createAIForDifficulty(difficulty: string): AI {
     switch (difficulty) {
         case "easy": return new EasyAI();
@@ -346,7 +348,7 @@ async function aivaiDoNextMove() {
 
     // If auto-play is on and game is still going, schedule next move
     if (aivaiAutoPlay && game.getState() === GameState.ONGOING) {
-        aivaiAutoTimer = setTimeout(() => aivaiDoNextMove(), 50);
+        aivaiAutoTimer = setTimeout(() => aivaiDoNextMove(), AIVAI_AUTO_DELAY_MS);
     }
 }
 
