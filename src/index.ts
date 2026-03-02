@@ -231,6 +231,10 @@ modeSelect.addEventListener("click", (event) => {
         minimaxPool?.terminate();
         minimaxPool = null;
         ai = new HardAI();
+    } else if (mode === "aivai") {
+        modeSelect.style.display = "none";
+        aivaiPanel.style.display = "block";
+        return;
     } else if (mode === "training") {
         modeSelect.style.display = "none";
         trainingPanel.style.display = "block";
@@ -244,6 +248,172 @@ modeSelect.addEventListener("click", (event) => {
     game = new Game();
     currentPlayer = 0;
     requestAnimationFrame(draw);
+});
+
+// ---------- AI vs AI ----------
+const aivaiPanel = document.getElementById("aivai-panel") as HTMLDivElement;
+const aivaiHud = document.getElementById("aivai-hud") as HTMLDivElement;
+const aivaiStatus = document.getElementById("aivai-status") as HTMLSpanElement;
+const aivaiNextBtn = document.getElementById("aivai-next") as HTMLButtonElement;
+const aivaiAutoBtn = document.getElementById("aivai-auto") as HTMLButtonElement;
+const aivaiQuitBtn = document.getElementById("aivai-quit") as HTMLButtonElement;
+const aivaiPlayer0Select = document.getElementById("aivai-player0") as HTMLSelectElement;
+const aivaiPlayer1Select = document.getElementById("aivai-player1") as HTMLSelectElement;
+
+let aivaiActive = false;
+let aivaiAIs: [AI, AI] | null = null;
+let aivaiThinking = false;
+let aivaiAutoPlay = false;
+let aivaiAutoTimer: ReturnType<typeof setTimeout> | null = null;
+let aivaiMoveCount = 0;
+
+function createAIForDifficulty(difficulty: string): AI {
+    switch (difficulty) {
+        case "easy": return new EasyAI();
+        case "normal": return new MediumAI();
+        case "hard": return new HardAI();
+        default: return new EasyAI();
+    }
+}
+
+function aivaiUpdateStatus() {
+    if (game.getState() !== GameState.ONGOING) {
+        const winner = game.getState() === GameState.WIN_0 ? "X" : "O";
+        const winDiff = game.getState() === GameState.WIN_0
+            ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+        aivaiStatus.textContent = `🏆 Player ${winner} (${winDiff}) wins after ${aivaiMoveCount} moves!`;
+        aivaiNextBtn.disabled = true;
+        aivaiAutoBtn.disabled = true;
+        aivaiStopAutoPlay();
+        return;
+    }
+    const symbol = currentPlayer === 0 ? "X" : "O";
+    const diff = currentPlayer === 0 ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+    aivaiStatus.textContent = `Move ${aivaiMoveCount + 1} — ${symbol} (${diff})'s turn.  Press Space or click Next Move`;
+}
+
+function aivaiStopAutoPlay() {
+    aivaiAutoPlay = false;
+    if (aivaiAutoTimer !== null) {
+        clearTimeout(aivaiAutoTimer);
+        aivaiAutoTimer = null;
+    }
+    aivaiAutoBtn.textContent = "▶ Auto";
+}
+
+async function aivaiDoNextMove() {
+    if (!aivaiActive || !aivaiAIs || aivaiThinking) return;
+    if (game.getState() !== GameState.ONGOING) return;
+
+    aivaiThinking = true;
+    aivaiNextBtn.disabled = true;
+    const symbol = currentPlayer === 0 ? "X" : "O";
+    const diff = currentPlayer === 0 ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+    aivaiStatus.textContent = `Move ${aivaiMoveCount + 1} — ${symbol} (${diff}) thinking…`;
+
+    const currentAI = aivaiAIs[currentPlayer];
+    const maxRetries = 5;
+    let moveAccepted = false;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const aiMove = await currentAI.getMove(game, currentPlayer);
+        if (game.addMove(aiMove.x, aiMove.y, currentPlayer)) {
+            moveAccepted = true;
+            break;
+        }
+    }
+
+    if (!moveAccepted) {
+        // fallback: place a random valid move near existing stones
+        const points = game.getPoints();
+        for (let attempt = 0; attempt < 100; attempt++) {
+            const target = points[Math.floor(Math.random() * points.length)]!;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 25 + Math.random() * 15;
+            const fx = target.x / SCALE + Math.cos(angle) * dist;
+            const fy = target.y / SCALE + Math.sin(angle) * dist;
+            if (game.addMove(fx, fy, currentPlayer)) {
+                break;
+            }
+        }
+    }
+
+    aivaiMoveCount++;
+    currentPlayer = currentPlayer === 0 ? 1 : 0;
+    aivaiThinking = false;
+    aivaiNextBtn.disabled = false;
+    aivaiUpdateStatus();
+
+    // If auto-play is on and game is still going, schedule next move
+    if (aivaiAutoPlay && game.getState() === GameState.ONGOING) {
+        aivaiAutoTimer = setTimeout(() => aivaiDoNextMove(), 50);
+    }
+}
+
+document.getElementById("aivai-start")?.addEventListener("click", () => {
+    const ai0 = createAIForDifficulty(aivaiPlayer0Select.value);
+    const ai1 = createAIForDifficulty(aivaiPlayer1Select.value);
+    aivaiAIs = [ai0, ai1];
+    aivaiActive = true;
+    aivaiMoveCount = 0;
+    aivaiThinking = false;
+    aivaiStopAutoPlay();
+
+    game = new Game();
+    currentPlayer = 0;
+
+    // Player X needs to make the first move since the board is empty
+    // Place an initial stone at the center for Player X
+    game.addMove(400, 400, 0);
+    aivaiMoveCount = 1;
+    currentPlayer = 1;
+
+    aivaiPanel.style.display = "none";
+    canvas.style.display = "block";
+    aivaiHud.style.display = "flex";
+    aivaiNextBtn.disabled = false;
+    aivaiAutoBtn.disabled = false;
+    aivaiUpdateStatus();
+    requestAnimationFrame(draw);
+});
+
+document.getElementById("aivai-back")?.addEventListener("click", () => {
+    aivaiPanel.style.display = "none";
+    modeSelect.style.display = "flex";
+});
+
+aivaiNextBtn.addEventListener("click", () => {
+    aivaiDoNextMove();
+});
+
+aivaiAutoBtn.addEventListener("click", () => {
+    if (aivaiAutoPlay) {
+        aivaiStopAutoPlay();
+    } else {
+        aivaiAutoPlay = true;
+        aivaiAutoBtn.textContent = "⏸ Pause";
+        if (!aivaiThinking) aivaiDoNextMove();
+    }
+});
+
+aivaiQuitBtn.addEventListener("click", () => {
+    aivaiStopAutoPlay();
+    aivaiActive = false;
+    aivaiAIs = null;
+    aivaiHud.style.display = "none";
+    canvas.style.display = "none";
+    modeSelect.style.display = "flex";
+});
+
+// Space key triggers next move in AI vs AI mode
+window.addEventListener("keydown", (event) => {
+    if (!aivaiActive) return;
+    if (event.code === "Space") {
+        event.preventDefault();
+        if (!aivaiThinking && game.getState() === GameState.ONGOING) {
+            aivaiDoNextMove();
+        }
+    }
 });
 
 // ---------- TRAINING UI ----------

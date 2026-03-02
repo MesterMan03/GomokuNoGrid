@@ -15,7 +15,38 @@
     <button data-mode="hard">vs AI (Hard)</button>
     <button data-mode="insane" disabled>vs AI (Insane)</button>
     <hr>
+    <button data-mode="aivai">AI vs AI</button>
     <button data-mode="training">AI Training (Evolution)</button>
+</div>
+<div id="aivai-panel" style="display:none;">
+    <h2>AI vs AI Battle</h2>
+    <div class="aivai-form">
+        <label>Player X (first):
+            <select id="aivai-player0">
+                <option value="easy">Easy</option>
+                <option value="normal">Normal</option>
+                <option value="hard" selected>Hard</option>
+            </select>
+        </label>
+        <label>Player O (second):
+            <select id="aivai-player1">
+                <option value="easy">Easy</option>
+                <option value="normal" selected>Normal</option>
+                <option value="hard">Hard</option>
+            </select>
+        </label>
+    </div>
+    <div class="aivai-buttons">
+        <button id="aivai-start">Start Battle</button>
+        <button id="aivai-back">← Back</button>
+    </div>
+    <p class="aivai-hint">Press <kbd>Space</kbd> or click <strong>Next Move</strong> to advance. Hold to auto-play.</p>
+</div>
+<div id="aivai-hud" style="display:none;">
+    <span id="aivai-status">Waiting…</span>
+    <button id="aivai-next">Next Move</button>
+    <button id="aivai-auto">▶ Auto</button>
+    <button id="aivai-quit">Quit</button>
 </div>
 <div id="training-panel" style="display:none;">
     <h2>AI Evolution Training</h2>

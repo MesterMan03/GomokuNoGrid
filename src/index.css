@@ -117,3 +117,89 @@ html, body {
     padding: 4px;
     font-size: 14px;
 }
+
+/* ── AI vs AI panel ───────────────────────────────────────── */
+
+#aivai-panel {
+    color: #eee;
+    padding: 20px 40px;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+#aivai-panel h2 {
+    margin-top: 10px;
+}
+
+.aivai-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.aivai-form label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.aivai-form select {
+    padding: 4px;
+    font-size: 14px;
+}
+
+.aivai-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.aivai-buttons button {
+    padding: 8px 18px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.aivai-hint {
+    color: #aaa;
+    font-size: 13px;
+}
+
+.aivai-hint kbd {
+    background: #444;
+    border: 1px solid #666;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: monospace;
+    color: #fff;
+}
+
+/* ── AI vs AI HUD (overlay bar) ──────────────────────────── */
+
+#aivai-hud {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0, 0, 0, 0.80);
+    color: #eee;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 16px;
+    font-size: 14px;
+    z-index: 100;
+}
+
+#aivai-hud button {
+    padding: 4px 14px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+#aivai-status {
+    flex: 1;
+    font-family: monospace;
+}
