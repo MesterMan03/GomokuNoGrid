@@ -1,6 +1,5 @@
 import { Game } from "./game.ts";
 import { MediumAI } from "./ai/medium.ts";
-import { SCALE } from "./consts.ts";
 import type { MediumAIConfig } from "./ai/types.ts";
 
 /// <reference lib="webworker" />
@@ -19,11 +18,8 @@ self.onmessage = (e: MessageEvent) => {
             return;
         }
 
-        // Reconstruct game from serialized points
-        const game = new Game();
-        for (const p of msg.points as Array<{ x: number; y: number; player: 0 | 1 }>) {
-            game.addMove(p.x / SCALE, p.y / SCALE, p.player);
-        }
+        // Reconstruct game from serialized points (already in scaled coordinates)
+        const game = Game.fromPoints(msg.points as Array<{ x: number; y: number; player: 0 | 1 }>);
 
         const result = ai.evaluateCandidate(game, msg.candidate, msg.player);
         self.postMessage({

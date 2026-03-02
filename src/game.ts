@@ -42,9 +42,11 @@ export enum GameState {
 }
 
 export class Game {
-    private readonly tree0: kdTree<Point>;
-    private readonly tree1: kdTree<Point>;
+    private tree0: kdTree<Point>;
+    private tree1: kdTree<Point>;
     private points: Point[];
+    private points0: Point[] = [];
+    private points1: Point[] = [];
     private state: GameState = GameState.ONGOING;
     private winPoints: Point[] = [];
     private lineGroups0: LineGroup[] = [];
@@ -70,20 +72,61 @@ export class Game {
     }
 
     /**
-     * Create a deep copy of this game by replaying all recorded moves.
+     * Build a Game from an array of points in internal (scaled) coordinates.
+     * Skips gameplay validation (overlap/distance rules, win checks) — use only
+     * for reconstructing known-valid states. Builds KD-trees and line groups once.
+     */
+    static fromPoints(points: ReadonlyArray<{ x: number; y: number; player: Player }>): Game {
+        const game = new Game();
+        for (const p of points) {
+            const point: Point = { x: p.x, y: p.y, player: p.player };
+            game.points.push(point);
+            if (p.player === 0) {
+                game.tree0.insert(point);
+                game.points0.push(point);
+            } else {
+                game.tree1.insert(point);
+                game.points1.push(point);
+            }
+        }
+        // Build line groups once at the end (not once per addMove)
+        game.updateLineGroups(0);
+        game.updateLineGroups(1);
+        return game;
+    }
+
+    /**
+     * Create a deep copy of this game by directly copying state.
+     * Builds balanced KD-trees from existing points instead of replaying moves.
      * Used by AI to simulate future states without mutating the real game.
      */
     clone(): Game {
         const copy = new Game();
-        for (const point of this.points) {
-            copy.addMove(point.x / SCALE, point.y / SCALE, point.player);
-        }
+        copy.points = this.points.slice();
+        copy.points0 = this.points0.slice();
+        copy.points1 = this.points1.slice();
+        copy.state = this.state;
+        copy.winPoints = this.winPoints.slice();
+        // Build balanced KD-trees directly (avoids replaying N addMoves)
+        copy.tree0 = new kdTree(copy.points0.slice(), distance, ["x", "y"]);
+        copy.tree1 = new kdTree(copy.points1.slice(), distance, ["x", "y"]);
+        // Deep copy line groups (opponent's groups needed for evaluation)
+        copy.lineGroups0 = this.lineGroups0.map(g => ({
+            ...g,
+            projections: g.projections.slice(),
+            stones: new Set(g.stones),
+        }));
+        copy.lineGroups1 = this.lineGroups1.map(g => ({
+            ...g,
+            projections: g.projections.slice(),
+            stones: new Set(g.stones),
+        }));
         return copy;
     }
 
     addMove(x: number, y: number, player: Player): Point | null {
         if(this.state !== GameState.ONGOING) {
-            console.log("Move rejected: game already ended");
+            console.debug("Move rejected: game already ended");
             return null;
         }
 
@@ -95,7 +138,7 @@ export class Game {
         const point = { x, y, player } satisfies Point;
         const nearest = [this.tree0.nearest(point, 1), this.tree1.nearest(point, 1)].flat();
         if(nearest.find(([_, dist]) => dist < SYMBOL_RADIUS * 2)) {
-            console.log("Move rejected: too close to existing move");
+            console.debug("Move rejected: too close to existing move");
             return null;
         }
 
@@ -103,13 +146,18 @@ export class Game {
         // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
         const sortedDistances = nearest.map(([_, dist]) => dist).sort((a, b) => a - b);
         if(sortedDistances.length > 0 && sortedDistances[0]! > MAX_PLACEMENT_DISTANCE) {
-            console.log("Move rejected: too far from existing moves");
+            console.debug("Move rejected: too far from existing moves");
             return null;
         }
 
 
-        if(player === 0) this.tree0.insert(point);
-        else this.tree1.insert(point);
+        if(player === 0) {
+            this.tree0.insert(point);
+            this.points0.push(point);
+        } else {
+            this.tree1.insert(point);
+            this.points1.push(point);
+        }
         this.points.push(point);
 
         // update line groups for the new stone
@@ -227,7 +275,7 @@ export class Game {
     }
 
     getPlayerPoints(player: Player): Point[] {
-        return this.points.filter(p => p.player === player);
+        return (player === 0 ? this.points0 : this.points1).slice();
     }
 
     getLineGroups(player: Player): ReadonlyArray<LineGroup> {
@@ -251,7 +299,7 @@ export class Game {
 
     private updateLineGroups(player: Player): void {
         const tree = player === 0 ? this.tree0 : this.tree1;
-        const points = this.points.filter(p => p.player === player);
+        const points = player === 0 ? this.points0 : this.points1;
         const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
 
         // due to line groups being very fragile and complex, simply rebuild all groups from scratch for the affected player after each move

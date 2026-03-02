@@ -74,20 +74,23 @@ export class MediumAI implements AI {
             lines: [],
         });
 
-        // sort by quick heuristic for better pruning at root
-        allCandidates.sort(
-            (a, b) => this.quickScore(b, game, player) - this.quickScore(a, game, player),
-        );
-        const topCandidates = allCandidates.slice(0, this.config.maxCandidates);
+        // sort by quick heuristic for better pruning at root (pre-compute to avoid repeated calls in sort)
+        const scoredCandidates = allCandidates.map(c => ({
+            candidate: c,
+            qs: this.quickScore(c, game, player),
+        }));
+        scoredCandidates.sort((a, b) => b.qs - a.qs);
+        const topScored = scoredCandidates.slice(0, this.config.maxCandidates);
+        const topCandidates = topScored.map(s => s.candidate);
 
         // Debug phase 2: Top candidates with scores
         this.debugPhases.push({
             title: "Top Candidates",
             description: `Top ${topCandidates.length} after heuristic sort`,
-            markers: topCandidates.map((c, i) => ({
-                x: c.x, y: c.y,
-                color: REASON_COLORS[c.reason],
-                label: `#${i + 1} q=${this.quickScore(c, game, player).toFixed(0)}`,
+            markers: topScored.map((s, i) => ({
+                x: s.candidate.x, y: s.candidate.y,
+                color: REASON_COLORS[s.candidate.reason],
+                label: `#${i + 1} q=${s.qs.toFixed(0)}`,
                 radius: 5,
             })),
             lines: [],
@@ -212,17 +215,16 @@ export class MediumAI implements AI {
         }
 
         const currentPlayer: Player = maximizingPlayer ? aiPlayer : (aiPlayer === 0 ? 1 : 0);
-        const moves = this.generateCandidates(state, currentPlayer);
+        const moves = this.generateCandidates(state, currentPlayer, false);
 
         if (moves.length === 0) {
             return this.evaluate(state, aiPlayer);
         }
 
-        // move ordering for better pruning
-        moves.sort(
-            (a, b) => this.quickScore(b, state, currentPlayer) - this.quickScore(a, state, currentPlayer),
-        );
-        const topMoves = moves.slice(0, this.config.maxCandidates);
+        // move ordering for better pruning (pre-compute to avoid repeated calls in sort)
+        const scoredMoves = moves.map(m => ({ move: m, qs: this.quickScore(m, state, currentPlayer) }));
+        scoredMoves.sort((a, b) => b.qs - a.qs);
+        const topMoves = scoredMoves.slice(0, this.config.maxCandidates).map(s => s.move);
 
         if (maximizingPlayer) {
             let maxEval = -Infinity;
@@ -365,11 +367,13 @@ export class MediumAI implements AI {
 
     // ── candidate generation ─────────────────────────────────────────────
 
-    private generateCandidates(game: Game, player: Player): Candidate[] {
+    /**
+     * @param validate When false, skips expensive isValidMove filter (2 KD queries
+     * per candidate). Used in inner minimax nodes where addMove handles rejection.
+     */
+    private generateCandidates(game: Game, player: Player, validate = true): Candidate[] {
         const opponent: Player = player === 0 ? 1 : 0;
         const candidateMap = new Map<string, Candidate>();
-
-        console.time("Candidate Generation");
 
         // offensive extensions (own groups, size ≥ 2)
         this.addLineExtensions(game.getLineGroups(player), candidateMap);
@@ -382,9 +386,9 @@ export class MediumAI implements AI {
             this.addTacticalNeighbors(game.getPlayerPoints(player), candidateMap);
         }
 
-        console.timeEnd("Candidate Generation");
-
-        return [...candidateMap.values()].filter(c => game.isValidMove(c.x, c.y));
+        const candidates = [...candidateMap.values()];
+        // In inner minimax nodes, skip expensive isValidMove filter — addMove handles invalid moves
+        return validate ? candidates.filter(c => game.isValidMove(c.x, c.y)) : candidates;
     }
 
     private addLineExtensions(groups: ReadonlyArray<LineGroup>, candidates: Map<string, Candidate>): void {
