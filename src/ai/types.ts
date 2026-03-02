@@ -116,23 +116,23 @@ export interface HardAIConfig {
 }
 
 export const DEFAULT_HARD_CONFIG: HardAIConfig = {
-    lineWeight2: 7.750615056232228,
-    lineWeight3: 569.4295677988202,
-    lineWeight4: 10035.777969929675,
-    openFactor: 3.8081154712672176,
-    opponentBias: 1.7387607586509222,
-    clusteringDecay: 15.411647304176638,
-    clusteringWeight: 3.2913220139887587,
-    criticalBlockScore: 433.51121825439196,
-    defensiveBlockScore: 238.75426784713076,
-    offensiveExtensionScore: 86.39703416259381,
-    threatSizeWeight: 19.12639845598633,
-    clusterQuickWeight: 7.423852541437384,
-    maxCandidates: 16,
-    baseDepth: 2.198183560686725,
-    maxDepth: 4.568205486611596,
-    forkBonus: 595.7194884814768,
-    defensePenalty: 4645.708741366953
+    lineWeight2: 8.81000035008037,
+    lineWeight3: 690.7686154704872,
+    lineWeight4: 6927.370074552344,
+    openFactor: 3.933452422563696,
+    opponentBias: 1.7828667896756278,
+    clusteringDecay: 11.648783789799175,
+    clusteringWeight: 3.6871787218774967,
+    criticalBlockScore: 390.3643476579421,
+    defensiveBlockScore: 274.32574377869173,
+    offensiveExtensionScore: 87.74356011551403,
+    threatSizeWeight: 17.96402963855924,
+    clusterQuickWeight: 8.55773036520702,
+    maxCandidates: 14,
+    baseDepth: 1.8707001227174642,
+    maxDepth: 3.7111414228486588,
+    forkBonus: 584.0185863171791,
+    defensePenalty: 4752.618878313149
 };
 
 /** Registry entry for an evolvable AI difficulty. */
