@@ -3,6 +3,9 @@ import { type Game, GameState, type Player, type Point, type LineGroup } from ".
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 
 const WIN_SCORE = 100_000;
+const MAX_NODES = 15_000;
+const INNER_MAX_CANDIDATES = 8;
+const CLUSTER_SAMPLE_SIZE = 8;
 
 // ── Threat tiers ────────────────────────────────────────────────────────
 
@@ -103,6 +106,7 @@ function isUnstable(state: Game, player: Player): boolean {
 
 export class HardAI implements AI {
     private debugPhases: DebugPhase[] = [];
+    private nodeCount = 0;
     readonly config: HardAIConfig;
 
     constructor(config?: Partial<HardAIConfig>) {
@@ -115,6 +119,7 @@ export class HardAI implements AI {
 
     async getMove(game: Game, player: Player): Promise<ScoredMove> {
         this.debugPhases = [];
+        this.nodeCount = 0;
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);
@@ -283,6 +288,9 @@ export class HardAI implements AI {
         aiPlayer: Player,
         aiWin: GameState,
     ): number {
+        this.nodeCount++;
+        if (this.nodeCount >= MAX_NODES) return this.evaluate(state, aiPlayer);
+
         const terminal = this.terminalScore(state, aiWin);
         if (terminal !== null) return terminal;
 
@@ -304,7 +312,7 @@ export class HardAI implements AI {
             if (a.move.tier !== b.move.tier) return a.move.tier - b.move.tier;
             return b.qs - a.qs;
         });
-        const topMoves = scoredMoves.slice(0, this.config.maxCandidates).map(s => s.move);
+        const topMoves = scoredMoves.slice(0, INNER_MAX_CANDIDATES).map(s => s.move);
 
         if (maximizingPlayer) {
             let maxEval = -Infinity;
@@ -314,10 +322,8 @@ export class HardAI implements AI {
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
                 anyExplored = true;
 
-                // Extension: search deeper for forcing moves
-                let ext = 0;
-                if (move.tier <= ThreatTier.FORCED) ext = 1;
-                else if (this.hasActiveThreat(child, aiPlayer === 0 ? 1 : 0)) ext = 1;
+                // Extension: only for forced-tier moves (no expensive hasActiveThreat check)
+                const ext = move.tier <= ThreatTier.FORCED ? 1 : 0;
                 const childDepth = this.extendedDepth(depth, ext);
 
                 const evalScore = this.terminalScore(child, aiWin)
@@ -336,9 +342,7 @@ export class HardAI implements AI {
                 if (!child.addMove(move.x, move.y, currentPlayer)) continue;
                 anyExplored = true;
 
-                let ext = 0;
-                if (move.tier <= ThreatTier.FORCED) ext = 1;
-                else if (this.hasActiveThreat(child, aiPlayer)) ext = 1;
+                const ext = move.tier <= ThreatTier.FORCED ? 1 : 0;
                 const childDepth = this.extendedDepth(depth, ext);
 
                 const evalScore = this.terminalScore(child, aiWin)
@@ -363,6 +367,9 @@ export class HardAI implements AI {
         aiWin: GameState,
         qDepth: number,
     ): number {
+        this.nodeCount++;
+        if (this.nodeCount >= MAX_NODES) return this.evaluate(state, aiPlayer);
+
         const terminal = this.terminalScore(state, aiWin);
         if (terminal !== null) return terminal;
 
@@ -420,18 +427,8 @@ export class HardAI implements AI {
     // ── threat detection ────────────────────────────────────────────────
 
     /**
-     * Check whether the given player has an active forced threat (open 4+).
-     */
-    private hasActiveThreat(state: Game, player: Player): boolean {
-        for (const group of state.getLineGroups(player)) {
-            const info = analyzeLineGroup(group, state);
-            if (info.maxRun >= 4 && info.openEnds >= 1) return true;
-        }
-        return false;
-    }
-
-    /**
      * Classify a candidate move's threat tier by simulating placement.
+     * Only used at root level — inner nodes use estimateTier() instead.
      */
     private classifyThreat(game: Game, x: number, y: number, player: Player): ThreatTier {
         const child = game.clone();
@@ -456,26 +453,38 @@ export class HardAI implements AI {
         return ThreatTier.NORMAL;
     }
 
+    /**
+     * Lightweight tier estimation from line group size, without cloning the game.
+     * Used at inner minimax nodes to avoid the expensive classifyThreat() clone.
+     */
+    private estimateTier(groupSize: number, isOffensive: boolean): ThreatTier {
+        // Offensive: extending a group of N creates N+1; blocking is about the existing threat
+        const effectiveSize = isOffensive ? groupSize + 1 : groupSize;
+        if (effectiveSize >= 5) return ThreatTier.TERMINAL;
+        if (effectiveSize >= 4) return ThreatTier.FORCED;
+        if (effectiveSize >= 3) return ThreatTier.STRONG;
+        return ThreatTier.NORMAL;
+    }
+
     // ── evaluation ──────────────────────────────────────────────────────
 
     evaluate(state: Game, aiPlayer: Player): number {
         const opponent: Player = aiPlayer === 0 ? 1 : 0;
         let score = 0;
 
-        // Line strength
+        // Line strength (single analyzeLineGroup call per group)
         let aiForkLines = 0;
         for (const group of state.getLineGroups(aiPlayer)) {
-            score += this.lineScore(group, state);
             const info = analyzeLineGroup(group, state);
+            score += this.lineScoreFromInfo(info);
             if (info.maxRun >= 3 && info.openEnds >= 1) aiForkLines++;
         }
 
         for (const group of state.getLineGroups(opponent)) {
-            const ls = this.lineScore(group, state);
-            score -= ls * this.config.opponentBias;
+            const info = analyzeLineGroup(group, state);
+            score -= this.lineScoreFromInfo(info) * this.config.opponentBias;
 
             // Defense safety: penalize if opponent can create open 4
-            const info = analyzeLineGroup(group, state);
             if (info.maxRun >= 4 && info.openEnds >= 1) {
                 score -= this.config.defensePenalty;
             }
@@ -486,13 +495,14 @@ export class HardAI implements AI {
             score += this.config.forkBonus * (aiForkLines - 1);
         }
 
-        // Positional clustering bonus
+        // Positional clustering bonus (capped to avoid O(n²) explosion)
         const aiPoints = state.getPlayerPoints(aiPlayer);
         if (aiPoints.length > 1) {
+            const sampleSize = Math.min(aiPoints.length, CLUSTER_SAMPLE_SIZE);
             let totalDist = 0;
             let pairs = 0;
-            for (let i = 0; i < aiPoints.length; i++) {
-                for (let j = i + 1; j < aiPoints.length; j++) {
+            for (let i = 0; i < sampleSize; i++) {
+                for (let j = i + 1; j < sampleSize; j++) {
                     const dx = aiPoints[i]!.x - aiPoints[j]!.x;
                     const dy = aiPoints[i]!.y - aiPoints[j]!.y;
                     totalDist += Math.sqrt(dx * dx + dy * dy) / SCALE;
@@ -505,8 +515,7 @@ export class HardAI implements AI {
         return score;
     }
 
-    private lineScore(group: LineGroup, state: Game): number {
-        const info = analyzeLineGroup(group, state);
+    private lineScoreFromInfo(info: LineInfo): number {
         if (info.maxRun >= 5) return WIN_SCORE;
         if (info.maxRun < 2) return 0;
         if (info.openEnds === 0) return 0; // dead line
@@ -560,10 +569,10 @@ export class HardAI implements AI {
         const candidateMap = new Map<string, Candidate>();
 
         // offensive extensions (own groups, size ≥ 2)
-        this.addLineExtensions(game, game.getLineGroups(player), player, candidateMap);
+        this.addLineExtensions(game, game.getLineGroups(player), player, candidateMap, validate);
 
         // defensive blocks (opponent groups, size ≥ 2)
-        this.addBlockingMoves(game, game.getLineGroups(opponent), player, candidateMap);
+        this.addBlockingMoves(game, game.getLineGroups(opponent), player, candidateMap, validate);
 
         // tactical neighbors when too few candidates
         if (candidateMap.size < this.config.maxCandidates) {
@@ -574,7 +583,7 @@ export class HardAI implements AI {
         return validate ? candidates.filter(c => game.isValidMove(c.x, c.y)) : candidates;
     }
 
-    private addLineExtensions(game: Game, groups: ReadonlyArray<LineGroup>, player: Player, candidates: Map<string, Candidate>): void {
+    private addLineExtensions(game: Game, groups: ReadonlyArray<LineGroup>, player: Player, candidates: Map<string, Candidate>, classify: boolean): void {
         for (const group of groups) {
             if (group.stones.size < 2) continue;
 
@@ -591,14 +600,16 @@ export class HardAI implements AI {
                 const key = candidateKey(extX, extY);
                 const existing = candidates.get(key);
                 if (!existing || existing.reason === MoveReason.NEARBY_RANDOM) {
-                    const tier = this.classifyThreat(game, extX, extY, player);
+                    const tier = classify
+                        ? this.classifyThreat(game, extX, extY, player)
+                        : this.estimateTier(group.stones.size, true);
                     candidates.set(key, { x: extX, y: extY, reason: MoveReason.OFFENSIVE_EXTENSION, threatSize: group.stones.size, tier });
                 }
             }
         }
     }
 
-    private addBlockingMoves(game: Game, opponentGroups: ReadonlyArray<LineGroup>, aiPlayer: Player, candidates: Map<string, Candidate>): void {
+    private addBlockingMoves(game: Game, opponentGroups: ReadonlyArray<LineGroup>, aiPlayer: Player, candidates: Map<string, Candidate>, classify: boolean): void {
         for (const group of opponentGroups) {
             if (group.stones.size < 2) continue;
 
@@ -617,7 +628,9 @@ export class HardAI implements AI {
                 const key = candidateKey(extX, extY);
                 const existing = candidates.get(key);
                 if (!existing || this.reasonPriority(reason) > this.reasonPriority(existing.reason) || group.stones.size > existing.threatSize) {
-                    const tier = this.classifyThreat(game, extX, extY, aiPlayer);
+                    const tier = classify
+                        ? this.classifyThreat(game, extX, extY, aiPlayer)
+                        : this.estimateTier(group.stones.size, false);
                     candidates.set(key, { x: extX, y: extY, reason, threatSize: group.stones.size, tier });
                 }
             }
