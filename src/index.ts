@@ -1,11 +1,13 @@
 import { SCALE } from "./consts.ts";
 import { Game, GameState, type Player } from "./game.ts";
 import type { AI } from "./ai/types.ts";
+import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
 import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
-import { DEFAULT_EVOLUTION_PARAMS } from "./ai/evolution.ts";
+import { DEFAULT_EVOLUTION_PARAMS, runEvolution, type GameUpdate } from "./ai/evolution.ts";
+import { MinimaxWorkerPool, MatchWorkerPool } from "./ai/worker-pool.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const modeSelect = document.getElementById("mode-select") as HTMLDivElement;
@@ -14,6 +16,7 @@ const trainingPanel = document.getElementById("training-panel") as HTMLDivElemen
 let game = new Game();
 let ai: AI | null = null;
 let aiThinking = false;
+let minimaxPool: MinimaxWorkerPool | null = null;
 
 const debugDrawer = new DebugDrawer();
 const renderer = new Renderer(canvas, debugDrawer);
@@ -191,10 +194,16 @@ modeSelect.addEventListener("click", (event) => {
 
     if (mode === "pvp") {
         ai = null;
+        minimaxPool?.terminate();
+        minimaxPool = null;
     } else if (mode === "easy") {
         ai = new EasyAI();
+        minimaxPool?.terminate();
+        minimaxPool = null;
     } else if (mode === "normal") {
-        ai = new MediumAI();
+        minimaxPool?.terminate();
+        minimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+        ai = new MediumAI(undefined, minimaxPool);
     } else if (mode === "training") {
         modeSelect.style.display = "none";
         trainingPanel.style.display = "block";
@@ -218,7 +227,8 @@ const trainResult = document.getElementById("train-result") as HTMLPreElement;
 const trainGamesContainer = document.getElementById("train-games") as HTMLDivElement;
 const trainDifficulty = document.getElementById("train-difficulty") as HTMLSelectElement;
 
-let trainWorker: Worker | null = null;
+let matchPool: MatchWorkerPool | null = null;
+let trainAbort: AbortController | null = null;
 const trainCanvases = new Map<number, HTMLCanvasElement>();
 
 function getOrCreateTrainCanvas(index: number): HTMLCanvasElement {
@@ -290,7 +300,7 @@ function drawMiniGame(canvas: HTMLCanvasElement, points: Array<{ x: number; y: n
     }
 }
 
-trainStartBtn?.addEventListener("click", () => {
+trainStartBtn?.addEventListener("click", async () => {
     const params = {
         simsPerBatch: parseInt((document.getElementById("train-sims") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.simsPerBatch,
         batches: parseInt((document.getElementById("train-batches") as HTMLInputElement).value) || DEFAULT_EVOLUTION_PARAMS.batches,
@@ -303,61 +313,61 @@ trainStartBtn?.addEventListener("click", () => {
     };
     const difficulty = trainDifficulty?.value || "normal";
 
-    // Clean up previous canvases
+    // Clean up previous
     trainGamesContainer.innerHTML = "";
     trainCanvases.clear();
+    matchPool?.terminate();
 
     trainStartBtn.disabled = true;
     trainStopBtn.disabled = false;
     trainLog.innerHTML = "";
     trainResult.textContent = "Running...";
 
-    trainWorker = new Worker(new URL("./training.worker.js", import.meta.url), { type: "module" });
+    trainAbort = new AbortController();
+    matchPool = new MatchWorkerPool();
 
-    trainWorker.onmessage = (e: MessageEvent) => {
-        const msg = e.data;
-        if (msg.type === "progress") {
-            const line = document.createElement("div");
-            line.textContent = msg.result.log;
-            trainLog.appendChild(line);
-            trainLog.scrollTop = trainLog.scrollHeight;
-        } else if (msg.type === "game_update") {
-            const canvas = getOrCreateTrainCanvas(msg.individualIndex);
-            drawMiniGame(canvas, msg.points);
-            const label = canvas.parentElement?.querySelector(".train-canvas-label");
-            if (label) label.textContent = `Gen ${msg.gen} | Individual ${msg.individualIndex}`;
-        } else if (msg.type === "done") {
-            trainResult.textContent = JSON.stringify(msg.bestConfig, null, 2);
-            trainStartBtn.disabled = false;
-            trainStopBtn.disabled = true;
-            trainWorker = null;
-        } else if (msg.type === "error") {
-            trainResult.textContent = `Error: ${msg.message}`;
-            trainStartBtn.disabled = false;
-            trainStopBtn.disabled = true;
-            trainWorker = null;
-        }
-    };
+    try {
+        const bestConfig = await runEvolution(
+            params,
+            difficulty,
+            (result) => {
+                const line = document.createElement("div");
+                line.textContent = result.log;
+                trainLog.appendChild(line);
+                trainLog.scrollTop = trainLog.scrollHeight;
+            },
+            (update: GameUpdate) => {
+                const canvas = getOrCreateTrainCanvas(update.individualIndex);
+                drawMiniGame(canvas, update.points);
+                const label = canvas.parentElement?.querySelector(".train-canvas-label");
+                if (label) label.textContent = `Gen ${update.gen} | Individual ${update.individualIndex}`;
+            },
+            trainAbort.signal,
+            matchPool,
+        );
+        trainResult.textContent = JSON.stringify(bestConfig, null, 2);
+    } catch (err) {
+        trainResult.textContent = `Error: ${err}`;
+    }
 
-    trainWorker.onerror = (e) => {
-        trainResult.textContent = `Worker error: ${e.message}`;
-        trainStartBtn.disabled = false;
-        trainStopBtn.disabled = true;
-        trainWorker = null;
-    };
-
-    trainWorker.postMessage({ type: "start", params, difficulty });
+    matchPool?.terminate();
+    matchPool = null;
+    trainStartBtn.disabled = false;
+    trainStopBtn.disabled = true;
+    trainAbort = null;
 });
 
 trainStopBtn?.addEventListener("click", () => {
-    trainWorker?.postMessage({ type: "stop" });
+    trainAbort?.abort();
+    matchPool?.terminate();
+    matchPool = null;
 });
 
 // Back button
 document.getElementById("train-back")?.addEventListener("click", () => {
-    trainWorker?.postMessage({ type: "stop" });
-    trainWorker?.terminate();
-    trainWorker = null;
+    trainAbort?.abort();
+    matchPool?.terminate();
+    matchPool = null;
     trainingPanel.style.display = "none";
     modeSelect.style.display = "flex";
 });

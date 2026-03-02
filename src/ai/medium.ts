@@ -1,6 +1,7 @@
 import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker, type MediumAIConfig, DEFAULT_MEDIUM_CONFIG } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
+import type { MinimaxWorkerPool, CandidateResult } from "./worker-pool.ts";
 
 const MINIMAX_DEPTH = 2; // root move already simulated → 2 more plies = 3-ply total
 const WIN_SCORE = 100_000;
@@ -27,11 +28,13 @@ const REASON_COLORS: Record<MoveReason, string> = {
 export class MediumAI implements AI {
     private debugPhases: DebugPhase[] = [];
     readonly config: MediumAIConfig;
+    private workerPool?: MinimaxWorkerPool;
 
-    constructor(config?: Partial<MediumAIConfig>) {
+    constructor(config?: Partial<MediumAIConfig>, workerPool?: MinimaxWorkerPool) {
         // Cast needed: Partial<> with index signature produces number|undefined,
         // but the spread over defaults guarantees all values are present.
         this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config } as MediumAIConfig;
+        this.workerPool = workerPool;
     }
 
     getLastDebugPhases(): DebugPhase[] {
@@ -95,28 +98,33 @@ export class MediumAI implements AI {
         let bestMove: Candidate | null = null;
         const minimaxResults: Array<{ candidate: Candidate; score: number }> = [];
 
-        for (const candidate of topCandidates) {
-            const child = game.clone();
-            const placed = child.addMove(candidate.x, candidate.y, player);
-            if (!placed) continue;
+        if (this.workerPool && topCandidates.length > 1) {
+            // ── Parallel evaluation via worker pool ──────────────────────
+            const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
+            const candidatePositions = topCandidates.map(c => ({ x: c.x, y: c.y }));
+            const results = await this.workerPool.evaluateCandidates(gamePoints, candidatePositions, player);
 
-            // immediate win check — skip remaining candidates
-            const childState = child.getState();
-            const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
-            if (childState === aiWinState) {
-                minimaxResults.push({ candidate, score: WIN_SCORE });
-                bestScore = WIN_SCORE;
-                bestMove = candidate;
-                break;
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i]!;
+                const candidate = topCandidates[i]!;
+                minimaxResults.push({ candidate, score: r.score });
+                if (r.score > bestScore) {
+                    bestScore = r.score;
+                    bestMove = candidate;
+                }
             }
+        } else {
+            // ── Sequential evaluation (fallback / single candidate) ─────
+            for (const candidate of topCandidates) {
+                const result = this.evaluateCandidate(game, candidate, player);
+                if (result.score <= -Infinity) continue; // addMove failed
+                minimaxResults.push({ candidate, score: result.score });
 
-            const score = this.minimax(child, MINIMAX_DEPTH, -Infinity, Infinity, false, player, aiWinState);
-            minimaxResults.push({ candidate, score });
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove = candidate;
-                if (bestScore >= WIN_SCORE) break; // guaranteed win found deeper — stop searching
+                if (result.score > bestScore) {
+                    bestScore = result.score;
+                    bestMove = candidate;
+                    if (result.immediateWin) break; // guaranteed win — stop searching
+                }
             }
         }
 
@@ -157,6 +165,26 @@ export class MediumAI implements AI {
             score: bestScore,
             reason: bestMove.reason,
         };
+    }
+
+    // ── single candidate evaluation (used by workers and sequential fallback) ──
+
+    evaluateCandidate(
+        game: Game,
+        candidate: { x: number; y: number },
+        player: Player,
+    ): { score: number; immediateWin: boolean } {
+        const child = game.clone();
+        const placed = child.addMove(candidate.x, candidate.y, player);
+        if (!placed) return { score: -Infinity, immediateWin: false };
+
+        const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+        if (child.getState() === aiWinState) {
+            return { score: WIN_SCORE, immediateWin: true };
+        }
+
+        const score = this.minimax(child, MINIMAX_DEPTH, -Infinity, Infinity, false, player, aiWinState);
+        return { score, immediateWin: score >= WIN_SCORE };
     }
 
     // ── minimax with alpha-beta ──────────────────────────────────────────
