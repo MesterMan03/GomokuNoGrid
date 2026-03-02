@@ -78,19 +78,19 @@ export interface MediumAIConfig {
 }
 
 export const DEFAULT_MEDIUM_CONFIG: MediumAIConfig = {
-    lineWeight2: 15,
-    lineWeight3: 247.31066159253209,
-    lineWeight4: 5490.300584042243,
-    openFactor: 3.4488843325834573,
-    opponentBias: 1.7979490343915925,
-    clusteringDecay: 42.59809142273841,
-    clusteringWeight: 4.623002090663807,
-    criticalBlockScore: 500,
-    defensiveBlockScore: 128.23379833371035,
+    lineWeight2: 11.90820398991699,
+    lineWeight3: 255.37020940648523,
+    lineWeight4: 4333.66949709354,
+    openFactor: 3.4778954833830795,
+    opponentBias: 2.211059939890869,
+    clusteringDecay: 32.51875801424919,
+    clusteringWeight: 5.613639759379915,
+    criticalBlockScore: 389.51654507337855,
+    defensiveBlockScore: 152.32298545313324,
     offensiveExtensionScore: 50,
-    threatSizeWeight: 30,
-    clusterQuickWeight: 5.580287440280992,
-    maxCandidates: 11,
+    threatSizeWeight: 31.02628123999485,
+    clusterQuickWeight: 5.749356049663743,
+    maxCandidates: 9,
 };
 
 /** Registry entry for an evolvable AI difficulty. */
