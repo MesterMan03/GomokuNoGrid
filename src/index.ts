@@ -515,13 +515,13 @@ trainStartBtn?.addEventListener("click", async () => {
 
     const params = {
         simsPerBatch: parseIntParam("train-sims", DEFAULT_EVOLUTION_PARAMS.simsPerBatch),
-        batches: parseIntParam("train-batches", DEFAULT_EVOLUTION_PARAMS.batches),
+        populationSize: parseIntParam("train-population", DEFAULT_EVOLUTION_PARAMS.populationSize),
+        generations: parseIntParam("train-generations", DEFAULT_EVOLUTION_PARAMS.generations),
         startingMoves: parseIntParam("train-start-moves", DEFAULT_EVOLUTION_PARAMS.startingMoves),
         extraMovesPerGen: parseIntParam("train-extra-moves", DEFAULT_EVOLUTION_PARAMS.extraMovesPerGen),
         mutationRate: parseFloatParam("train-mutation-rate", DEFAULT_EVOLUTION_PARAMS.mutationRate),
         mutationStrength: parseFloatParam("train-mutation-strength", DEFAULT_EVOLUTION_PARAMS.mutationStrength),
         eliteCount: DEFAULT_EVOLUTION_PARAMS.eliteCount,
-        populationSize: DEFAULT_EVOLUTION_PARAMS.populationSize,
     };
     const difficulty = trainDifficulty?.value || "normal";
 
@@ -552,7 +552,7 @@ trainStartBtn?.addEventListener("click", async () => {
                 const canvas = getOrCreateTrainCanvas(update.individualIndex);
                 drawMiniGame(canvas, update.points);
                 const label = canvas.parentElement?.querySelector(".train-canvas-label");
-                if (label) label.textContent = `Gen ${update.gen} | Individual ${update.individualIndex}`;
+                if (label) label.textContent = `Gen ${update.gen} | Batch ${update.individualIndex}`;
             },
             trainAbort.signal,
             matchPool,

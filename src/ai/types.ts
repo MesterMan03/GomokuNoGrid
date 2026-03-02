@@ -79,18 +79,18 @@ export interface MediumAIConfig {
 
 export const DEFAULT_MEDIUM_CONFIG: MediumAIConfig = {
     lineWeight2: 11.90820398991699,
-    lineWeight3: 255.37020940648523,
-    lineWeight4: 4333.66949709354,
-    openFactor: 3.4778954833830795,
+    lineWeight3: 269.6910527799687,
+    lineWeight4: 4506.031031762293,
+    openFactor: 2.90469228115494,
     opponentBias: 2.211059939890869,
-    clusteringDecay: 32.51875801424919,
-    clusteringWeight: 5.613639759379915,
+    clusteringDecay: 31.453351772302383,
+    clusteringWeight: 6.830837121206099,
     criticalBlockScore: 389.51654507337855,
-    defensiveBlockScore: 152.32298545313324,
-    offensiveExtensionScore: 50,
-    threatSizeWeight: 31.02628123999485,
-    clusterQuickWeight: 5.749356049663743,
-    maxCandidates: 9,
+    defensiveBlockScore: 135.29753513870904,
+    offensiveExtensionScore: 43.06817114509394,
+    threatSizeWeight: 31.595952626095404,
+    clusterQuickWeight: 4.36622372923175,
+    maxCandidates: 10
 };
 
 /** Configurable weights for the hard AI evaluation. */
@@ -116,23 +116,23 @@ export interface HardAIConfig {
 }
 
 export const DEFAULT_HARD_CONFIG: HardAIConfig = {
-    lineWeight2: 9.585917701223213,
+    lineWeight2: 7.750615056232228,
     lineWeight3: 569.4295677988202,
-    lineWeight4: 9385.852090588292,
-    openFactor: 3.686419685700566,
-    opponentBias: 1.8583120219962987,
-    clusteringDecay: 15.438478164205407,
-    clusteringWeight: 3.1720565985720723,
-    criticalBlockScore: 472.60657957764795,
-    defensiveBlockScore: 235.6581662362603,
-    offensiveExtensionScore: 73.03932459100045,
-    threatSizeWeight: 24.339450224370683,
-    clusterQuickWeight: 8.833087564094733,
-    maxCandidates: 13,
-    baseDepth: 2.518099619100068,
-    maxDepth: 5.998895457659859,
+    lineWeight4: 10035.777969929675,
+    openFactor: 3.8081154712672176,
+    opponentBias: 1.7387607586509222,
+    clusteringDecay: 15.411647304176638,
+    clusteringWeight: 3.2913220139887587,
+    criticalBlockScore: 433.51121825439196,
+    defensiveBlockScore: 238.75426784713076,
+    offensiveExtensionScore: 86.39703416259381,
+    threatSizeWeight: 19.12639845598633,
+    clusterQuickWeight: 7.423852541437384,
+    maxCandidates: 16,
+    baseDepth: 2.198183560686725,
+    maxDepth: 4.568205486611596,
     forkBonus: 595.7194884814768,
-    defensePenalty: 4092.6434581619624
+    defensePenalty: 4645.708741366953
 };
 
 /** Registry entry for an evolvable AI difficulty. */
