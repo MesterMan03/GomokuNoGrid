@@ -4,6 +4,7 @@ import type { AI } from "./ai/types.ts";
 import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
 import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
+import { HardAI } from "./ai/hard.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
 import { DEFAULT_EVOLUTION_PARAMS, runEvolution, type GameUpdate } from "./ai/evolution.ts";
@@ -226,6 +227,10 @@ modeSelect.addEventListener("click", (event) => {
         minimaxPool?.terminate();
         minimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
         ai = new MediumAI(undefined, minimaxPool);
+    } else if (mode === "hard") {
+        minimaxPool?.terminate();
+        minimaxPool = null;
+        ai = new HardAI();
     } else if (mode === "training") {
         modeSelect.style.display = "none";
         trainingPanel.style.display = "block";

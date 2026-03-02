@@ -1,7 +1,8 @@
 import { GameState, type Point } from "../game.ts";
 import { EasyAI } from "./easy.ts";
 import { MediumAI } from "./medium.ts";
-import { type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, type EasyAIConfig, type MediumAIConfig } from "./types.ts";
+import { HardAI } from "./hard.ts";
+import { type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, type EasyAIConfig, type MediumAIConfig, type HardAIConfig } from "./types.ts";
 import { playMatch } from "./match-utils.ts";
 import type { MatchWorkerPool, MatchTask } from "./worker-pool.ts";
 
@@ -15,6 +16,10 @@ const AI_REGISTRY: Record<string, AIDefinition> = {
     normal: {
         defaultConfig: DEFAULT_MEDIUM_CONFIG,
         createAI: (config) => new MediumAI(config as Partial<MediumAIConfig>),
+    },
+    hard: {
+        defaultConfig: DEFAULT_HARD_CONFIG,
+        createAI: (config) => new HardAI(config as Partial<HardAIConfig>),
     },
 };
 

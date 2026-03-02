@@ -12,7 +12,7 @@
     <button data-mode="pvp">Player vs Player</button>
     <button data-mode="easy">vs AI (Easy)</button>
     <button data-mode="normal">vs AI (Normal)</button>
-    <button data-mode="hard" disabled>vs AI (Hard)</button>
+    <button data-mode="hard">vs AI (Hard)</button>
     <button data-mode="insane" disabled>vs AI (Insane)</button>
     <hr>
     <button data-mode="training">AI Training (Evolution)</button>
@@ -24,6 +24,7 @@
             <select id="train-difficulty">
                 <option value="easy">Easy</option>
                 <option value="normal" selected>Normal (Medium)</option>
+                <option value="hard">Hard</option>
             </select>
         </label>
         <label>Simulations per batch: <input id="train-sims" type="number" value="4" min="1" max="50"></label>

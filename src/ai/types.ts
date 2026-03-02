@@ -93,6 +93,48 @@ export const DEFAULT_MEDIUM_CONFIG: MediumAIConfig = {
     maxCandidates: 9,
 };
 
+/** Configurable weights for the hard AI evaluation. */
+export interface HardAIConfig {
+    [key: string]: number;
+    lineWeight2: number;
+    lineWeight3: number;
+    lineWeight4: number;
+    openFactor: number;
+    opponentBias: number;
+    clusteringDecay: number;
+    clusteringWeight: number;
+    criticalBlockScore: number;
+    defensiveBlockScore: number;
+    offensiveExtensionScore: number;
+    threatSizeWeight: number;
+    clusterQuickWeight: number;
+    maxCandidates: number;
+    baseDepth: number;
+    maxDepth: number;
+    forkBonus: number;
+    defensePenalty: number;
+}
+
+export const DEFAULT_HARD_CONFIG: HardAIConfig = {
+    lineWeight2: 12,
+    lineWeight3: 500,
+    lineWeight4: 10000,
+    openFactor: 3.5,
+    opponentBias: 2.2,
+    clusteringDecay: 32,
+    clusteringWeight: 5.6,
+    criticalBlockScore: 500,
+    defensiveBlockScore: 200,
+    offensiveExtensionScore: 80,
+    threatSizeWeight: 40,
+    clusterQuickWeight: 6,
+    maxCandidates: 12,
+    baseDepth: 4,
+    maxDepth: 6,
+    forkBonus: 800,
+    defensePenalty: 5000,
+};
+
 /** Registry entry for an evolvable AI difficulty. */
 export interface AIDefinition {
     defaultConfig: Record<string, number>;
