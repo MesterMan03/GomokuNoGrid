@@ -20,4 +20,4 @@ export const EPSILON = 1e-4;
  * The ideal spacing between consecutive stones in a line (world units).
  * Between SYMBOL_RADIUS * 2 (no overlap) and WIN_D_MAX / SCALE (max consecutive gap).
  */
-export const IDEAL_SPACING = Math.round((2 * SYMBOL_RADIUS * SCALE + WIN_D_MAX) / 2);
+export const IDEAL_SPACING = Math.round((2 * SYMBOL_RADIUS * SCALE + WIN_D_MAX) / 2 / SCALE);
