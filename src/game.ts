@@ -5,8 +5,7 @@ import {
     MAX_PLACEMENT_DISTANCE,
     PERPENDICULAR_TOLERANCE, SCALE,
     SYMBOL_RADIUS,
-    WIN_ANGLE_STEP, WIN_D_MAX,
-    WIN_SEARCH_RADIUS
+    WIN_ANGLE_STEP, WIN_D_MAX
 } from "./consts.ts";
 
 /**
@@ -41,10 +40,17 @@ export enum GameState {
     WIN_1
 }
 
+export interface GameDump {
+    points: Array<{ x: number; y: number; player: Player }>;
+    state: GameState;
+}
+
 export class Game {
-    private readonly tree0: kdTree<Point>;
-    private readonly tree1: kdTree<Point>;
+    private tree0: kdTree<Point>;
+    private tree1: kdTree<Point>;
     private points: Point[];
+    private points0: Point[] = [];
+    private points1: Point[] = [];
     private state: GameState = GameState.ONGOING;
     private winPoints: Point[] = [];
     private lineGroups0: LineGroup[] = [];
@@ -69,9 +75,80 @@ export class Game {
         return this.winPoints.slice();
     }
 
+    /**
+     * Build a Game from an array of points in internal (scaled) coordinates.
+     * Skips gameplay validation (overlap/distance rules, win checks) — use only
+     * for reconstructing known-valid states. Builds KD-trees and line groups once.
+     */
+    static fromPoints(points: ReadonlyArray<{ x: number; y: number; player: Player }>): Game {
+        const game = new Game();
+        const pts0: Point[] = [];
+        const pts1: Point[] = [];
+        for (const p of points) {
+            const point: Point = { x: p.x, y: p.y, player: p.player };
+            game.points.push(point);
+            if (p.player === 0) pts0.push(point);
+            else pts1.push(point);
+        }
+        game.points0 = pts0;
+        game.points1 = pts1;
+        // Build balanced KD-trees from arrays (instead of inserting one by one)
+        game.tree0 = new kdTree(pts0, distance, ["x", "y"]);
+        game.tree1 = new kdTree(pts1, distance, ["x", "y"]);
+        game.updateLineGroups(0);
+        game.updateLineGroups(1);
+        return game;
+    }
+
+    /**
+     * Create a deep copy of this game by directly copying state.
+     * Builds balanced KD-trees from existing points instead of replaying moves.
+     * Used by AI to simulate future states without mutating the real game.
+     */
+    clone(): Game {
+        const copy = new Game();
+        copy.points = this.points.slice();
+        copy.points0 = this.points0.slice();
+        copy.points1 = this.points1.slice();
+        copy.state = this.state;
+        copy.winPoints = this.winPoints.slice();
+        // Build balanced KD-trees directly (avoids replaying N addMoves)
+        copy.tree0 = new kdTree(copy.points0.slice(), distance, ["x", "y"]);
+        copy.tree1 = new kdTree(copy.points1.slice(), distance, ["x", "y"]);
+        // Deep copy line groups (opponent's groups needed for evaluation)
+        copy.lineGroups0 = this.lineGroups0.map(g => ({
+            ...g,
+            projections: g.projections.slice(),
+            stones: new Set(g.stones),
+        }));
+        copy.lineGroups1 = this.lineGroups1.map(g => ({
+            ...g,
+            projections: g.projections.slice(),
+            stones: new Set(g.stones),
+        }));
+        return copy;
+    }
+
+    dump(): GameDump {
+        return {
+            points: this.points.map(p => ({ x: p.x, y: p.y, player: p.player })),
+            state: this.state,
+        };
+    }
+
+    static load(dump: GameDump): Game {
+        const game = Game.fromPoints(dump.points);
+        game.state = dump.state;
+        if (dump.state !== GameState.ONGOING) {
+            const player: Player = dump.state === GameState.WIN_0 ? 0 : 1;
+            game.findWinningSegment(player);
+        }
+        return game;
+    }
+
     addMove(x: number, y: number, player: Player): Point | null {
         if(this.state !== GameState.ONGOING) {
-            console.log("Move rejected: game already ended");
+            console.debug("Move rejected: game already ended");
             return null;
         }
 
@@ -83,7 +160,7 @@ export class Game {
         const point = { x, y, player } satisfies Point;
         const nearest = [this.tree0.nearest(point, 1), this.tree1.nearest(point, 1)].flat();
         if(nearest.find(([_, dist]) => dist < SYMBOL_RADIUS * 2)) {
-            console.log("Move rejected: too close to existing move");
+            console.debug("Move rejected: too close to existing move");
             return null;
         }
 
@@ -91,20 +168,25 @@ export class Game {
         // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
         const sortedDistances = nearest.map(([_, dist]) => dist).sort((a, b) => a - b);
         if(sortedDistances.length > 0 && sortedDistances[0]! > MAX_PLACEMENT_DISTANCE) {
-            console.log("Move rejected: too far from existing moves");
+            console.debug("Move rejected: too far from existing moves");
             return null;
         }
 
 
-        if(player === 0) this.tree0.insert(point);
-        else this.tree1.insert(point);
+        if(player === 0) {
+            this.tree0.insert(point);
+            this.points0.push(point);
+        } else {
+            this.tree1.insert(point);
+            this.points1.push(point);
+        }
         this.points.push(point);
 
         // update line groups for the new stone
-        this.updateLineGroups(point);
+        this.updateLineGroups(point.player);
 
-        // check for win condition
-        if(this.checkWin(point)) {
+        // check for win condition using line groups
+        if(this.findWinningSegment(point.player)) {
             this.state = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
             console.log(`Player ${player} wins!`);
         }
@@ -119,104 +201,8 @@ export class Game {
         return nearest.map(([p, _]) => p);
     }
 
-    checkWin(point: Point): boolean {
-        const player = point.player;
-
-        // get nearby points for the same player
-        const tree = player === 0 ? this.tree0 : this.tree1;
-        const nearby = tree.nearest(point, this.points.length, WIN_SEARCH_RADIUS).filter(p => p[0].x !== point.x || p[0].y !== point.y);
-        if(nearby.length < 4) return false; // not enough points to win
-
-        const testedAngles = new Set<number>();
-
-        // for each nearby point, define a candidate direction
-        for(const [otherPoint] of nearby) {
-            const dx = otherPoint.x - point.x;
-            const dy = otherPoint.y - point.y;
-
-            const length = Math.sqrt(dx * dx + dy * dy);
-            if(length <= EPSILON) continue
-
-            const ux = dx / length;
-            const uy = dy / length;
-
-            // quantize angle
-            const angle = Math.atan2(uy, ux);
-            const bucket = Math.round(angle / WIN_ANGLE_STEP);
-
-            if(testedAngles.has(bucket)) continue; // already tested this direction
-            testedAngles.add(bucket);
-
-            // collect aligned points
-            const aligned = new Set<Point>();
-            aligned.add(point);
-
-            for(const [candidate] of nearby) {
-                const vx = candidate.x - point.x;
-                const vy = candidate.y - point.y;
-
-                // perpendicular distance using cross product
-                const perp = Math.abs(vx * uy - vy * ux);
-
-                if(perp <= PERPENDICULAR_TOLERANCE) aligned.add(candidate);
-                else console.debug("Rejected point for alignment:", candidate, "perpendicular distance:", perp);
-
-            }
-
-            console.debug("Aligned points:", Array.from(aligned));
-            if(aligned.size < 5) continue; // not enough aligned points
-
-            // project to 1d
-            const projections = new Array<number>();
-
-            for(const p of aligned) {
-                const tx = p.x - point.x;
-                const ty = p.y - point.y;
-
-                const t = tx * ux + ty * uy; // dot product
-                projections.push(t);
-            }
-
-            // sort projections in ascending order
-            projections.sort((a, b) => a - b);
-
-            console.debug("Projections:", projections);
-
-            // check spacing constraint
-            let consecutiveCount = 1;
-            for(let i = 0; i < projections.length - 1; i++) {
-                const nextProj = projections[i + 1];
-                const currentProj = projections[i];
-                console.debug("Checking projections:", currentProj, nextProj);
-                if(nextProj == null || currentProj == null) continue;
-
-                const delta = nextProj - currentProj;
-                if(delta <= WIN_D_MAX) {
-                    consecutiveCount++;
-                    console.debug("Valid spacing between projections:", currentProj, nextProj, "delta:", delta, "consecutiveCount:", consecutiveCount);
-                    // win condition met
-                    if(consecutiveCount >= 5) {
-                        // set the first and last of the winning points for highlighting
-                        const sortedAligned = Array.from(aligned).sort((a, b) => {
-                            const ta = (a.x - point.x) * ux + (a.y - point.y) * uy;
-                            const tb = (b.x - point.x) * ux + (b.y - point.y) * uy;
-                            return ta - tb;
-                        });
-                        this.winPoints = [sortedAligned[0]!, sortedAligned[sortedAligned.length - 1]!];
-                        return true;
-                    }
-                } else {
-                    console.debug("Invalid spacing between projections:", currentProj, nextProj, "delta:", delta, "resetting consecutive count");
-                    consecutiveCount = 1; // reset count if spacing is not valid
-                }
-            }
-        }
-
-        return false;
-    }
-
     getPlayerPoints(player: Player): Point[] {
-        return this.points.filter(p => p.player === player);
+        return (player === 0 ? this.points0 : this.points1).slice();
     }
 
     getLineGroups(player: Player): ReadonlyArray<LineGroup> {
@@ -238,71 +224,141 @@ export class Game {
         return nearest[0]![1] <= MAX_PLACEMENT_DISTANCE;
     }
 
-    private updateLineGroups(point: Point): void {
-        const player = point.player;
-        const tree = player === 0 ? this.tree0 : this.tree1;
+    /**
+     * Check if any line group for the given player has 5+ consecutive stones.
+     * Sets winPoints to the endpoints of the winning segment if found.
+     */
+    private findWinningSegment(player: Player): boolean {
         const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
+        for (const group of groups) {
+            if (group.projections.length < 5) continue;
 
-        const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
-            .filter(([p]) => p !== point);
-
-        const addedToGroups = new Set<LineGroup>();
-
-        for (const [neighbor] of nearby) {
-            const dx = neighbor.x - point.x;
-            const dy = neighbor.y - point.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            if (len <= EPSILON) continue;
-
-            let ux = dx / len;
-            let uy = dy / len;
-
-            // canonicalize direction to [0, π)
-            let angle = Math.atan2(uy, ux);
-            if (angle < 0) { angle += Math.PI; ux = -ux; uy = -uy; }
-            else if (angle >= Math.PI) { angle -= Math.PI; ux = -ux; uy = -uy; }
-            const bucket = Math.round(angle / WIN_ANGLE_STEP);
-
-            // try to find an existing group containing this neighbor with matching direction
-            let matched = false;
-            for (const group of groups) {
-                if (addedToGroups.has(group)) continue;
-                if (!group.stones.has(neighbor)) continue;
-                if (group.angleBucket !== bucket) continue;
-
-                // check perpendicular distance of point to group's line
-                const vx = point.x - group.originX;
-                const vy = point.y - group.originY;
-                const perp = Math.abs(vx * group.dirY - vy * group.dirX);
-                if (perp > PERPENDICULAR_TOLERANCE) continue;
-
-                // add point to group
-                group.stones.add(point);
-                const proj = vx * group.dirX + vy * group.dirY;
-                const idx = group.projections.findIndex(p => p > proj);
-                if (idx === -1) group.projections.push(proj);
-                else group.projections.splice(idx, 0, proj);
-
-                addedToGroups.add(group);
-                matched = true;
-                break;
-            }
-
-            if (!matched) {
-                // create new line group with point and neighbor
-                const proj = dx * ux + dy * uy;
-                const newGroup: LineGroup = {
-                    dirX: ux,
-                    dirY: uy,
-                    angleBucket: bucket,
-                    originX: point.x,
-                    originY: point.y,
-                    projections: [0, proj].sort((a, b) => a - b),
-                    stones: new Set([point, neighbor]),
-                };
-                groups.push(newGroup);
-                addedToGroups.add(newGroup);
+            let run = 1;
+            let runStartIdx = 0;
+            for (let i = 0; i < group.projections.length - 1; i++) {
+                if (group.projections[i + 1]! - group.projections[i]! <= WIN_D_MAX) {
+                    run++;
+                    if (run >= 5) {
+                        // Find stone objects sorted by projection for win endpoints
+                        const sorted = Array.from(group.stones).sort((a, b) => {
+                            const ta = (a.x - group.originX) * group.dirX + (a.y - group.originY) * group.dirY;
+                            const tb = (b.x - group.originX) * group.dirX + (b.y - group.originY) * group.dirY;
+                            return ta - tb;
+                        });
+                        this.winPoints = [sorted[runStartIdx]!, sorted[i + 1]!];
+                        return true;
+                    }
+                } else {
+                    run = 1;
+                    runStartIdx = i + 1;
+                }
             }
         }
+        return false;
+    }
+
+    private updateLineGroups(player: Player): void {
+        const tree = player === 0 ? this.tree0 : this.tree1;
+        const points = player === 0 ? this.points0 : this.points1;
+        const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
+
+        groups.length = 0;
+        const seenGroups = new Set<string>();
+
+        for (const point of points) {
+            const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
+                .filter(([p]) => p !== point);
+
+            const testedBuckets = new Set<number>();
+
+            for (const [neighbor] of nearby) {
+                const dx = neighbor.x - point.x;
+                const dy = neighbor.y - point.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len <= EPSILON) continue;
+                if (len > WIN_D_MAX) continue;
+
+                let ux = dx / len;
+                let uy = dy / len;
+
+                // canonicalize direction to [0, π)
+                let angle = Math.atan2(uy, ux);
+                if (angle < 0) {
+                    angle += Math.PI;
+                    ux = -ux;
+                    uy = -uy;
+                } else if (angle >= Math.PI) {
+                    angle -= Math.PI;
+                    ux = -ux;
+                    uy = -uy;
+                }
+                const bucket = Math.round(angle / WIN_ANGLE_STEP);
+
+                // skip already-tested directions from this point
+                if (testedBuckets.has(bucket)) continue;
+                testedBuckets.add(bucket);
+
+                // find all collinear points in the nearby set
+                const collinear: Array<{ point: Point; proj: number }> = [];
+                collinear.push({ point, proj: 0 });
+
+                for (const [candidate] of nearby) {
+                    if (candidate === point) continue;
+                    const vx = candidate.x - point.x;
+                    const vy = candidate.y - point.y;
+                    const perp = Math.abs(vx * uy - vy * ux);
+                    if (perp <= PERPENDICULAR_TOLERANCE) {
+                        const proj = vx * ux + vy * uy;
+                        collinear.push({ point: candidate, proj });
+                    }
+                }
+
+                // sort by projection
+                collinear.sort((a, b) => a.proj - b.proj);
+
+                // split into consecutive segments (gap ≤ WIN_D_MAX)
+                let segStart = 0;
+                for (let i = 0; i < collinear.length - 1; i++) {
+                    if (collinear[i + 1]!.proj - collinear[i]!.proj > WIN_D_MAX) {
+                        if (i - segStart + 1 >= 2) {
+                            this.addGroupIfNew(groups, seenGroups, collinear.slice(segStart, i + 1), ux, uy, bucket);
+                        }
+                        segStart = i + 1;
+                    }
+                }
+                // last segment
+                if (collinear.length - segStart >= 2) {
+                    this.addGroupIfNew(groups, seenGroups, collinear.slice(segStart), ux, uy, bucket);
+                }
+            }
+        }
+    }
+
+    private addGroupIfNew(
+        groups: LineGroup[],
+        seen: Set<string>,
+        segment: Array<{ point: Point; proj: number }>,
+        ux: number, uy: number, bucket: number,
+    ): void {
+        // canonical key from sorted coordinates to deduplicate
+        const key = segment
+            .map(s => `${s.point.x},${s.point.y}`)
+            .sort()
+            .join("|");
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        const origin = segment[0]!.point;
+        groups.push({
+            dirX: ux,
+            dirY: uy,
+            angleBucket: bucket,
+            originX: origin.x,
+            originY: origin.y,
+            projections: segment.map(s => {
+                return (s.point.x - origin.x) * ux + (s.point.y - origin.y) * uy;
+            }).sort((a, b) => a - b),
+            stones: new Set(segment.map(s => s.point)),
+        });
     }
 }
