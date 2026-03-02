@@ -1,4 +1,4 @@
-import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker, type HardAIConfig, DEFAULT_HARD_CONFIG } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type HardAIConfig, DEFAULT_HARD_CONFIG } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 
@@ -265,6 +265,15 @@ export class HardAI implements AI {
         return gs === aiWin ? WIN_SCORE : -WIN_SCORE;
     }
 
+    /**
+     * Compute the effective depth for a child node, accounting for extensions
+     * but never exceeding maxDepth total plies from the root.
+     */
+    private extendedDepth(depth: number, ext: number): number {
+        const pliesFromRoot = this.config.baseDepth - depth + 1;
+        return Math.max(0, Math.min(depth - 1 + ext, this.config.maxDepth - pliesFromRoot));
+    }
+
     private minimax(
         state: Game,
         depth: number,
@@ -309,10 +318,10 @@ export class HardAI implements AI {
                 let ext = 0;
                 if (move.tier <= ThreatTier.FORCED) ext = 1;
                 else if (this.hasActiveThreat(child, aiPlayer === 0 ? 1 : 0)) ext = 1;
-                const childDepth = Math.min(depth - 1 + ext, this.config.maxDepth - (this.config.baseDepth - depth + 1));
+                const childDepth = this.extendedDepth(depth, ext);
 
                 const evalScore = this.terminalScore(child, aiWin)
-                    ?? this.minimax(child, Math.max(0, childDepth), alpha, beta, false, aiPlayer, aiWin);
+                    ?? this.minimax(child, childDepth, alpha, beta, false, aiPlayer, aiWin);
 
                 maxEval = Math.max(maxEval, evalScore);
                 alpha = Math.max(alpha, evalScore);
@@ -330,10 +339,10 @@ export class HardAI implements AI {
                 let ext = 0;
                 if (move.tier <= ThreatTier.FORCED) ext = 1;
                 else if (this.hasActiveThreat(child, aiPlayer)) ext = 1;
-                const childDepth = Math.min(depth - 1 + ext, this.config.maxDepth - (this.config.baseDepth - depth + 1));
+                const childDepth = this.extendedDepth(depth, ext);
 
                 const evalScore = this.terminalScore(child, aiWin)
-                    ?? this.minimax(child, Math.max(0, childDepth), alpha, beta, true, aiPlayer, aiWin);
+                    ?? this.minimax(child, childDepth, alpha, beta, true, aiPlayer, aiWin);
 
                 minEval = Math.min(minEval, evalScore);
                 beta = Math.min(beta, evalScore);
