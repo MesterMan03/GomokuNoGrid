@@ -133,6 +133,31 @@ window.addEventListener("keydown", (event) => {
         }
     }
 
+    // ---------- UNDO (Ctrl+Z) ----------
+    if (code === "KeyZ" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        if (aivaiActive || aiThinking) return;
+
+        if (ai) {
+            // vs AI: undo AI's last move (if present), then undo human's move
+            const points = game.getPoints();
+            if (points.length > 0 && points[points.length - 1]!.player === 1) {
+                game.undo(); // undo AI move
+            }
+            if (game.getPoints().length > 0) {
+                game.undo(); // undo human move
+            }
+            currentPlayer = 0;
+        } else {
+            // PvP: undo last move
+            const removed = game.undo();
+            if (removed) {
+                currentPlayer = removed.player;
+            }
+        }
+        return;
+    }
+
     if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {
         activePanKeys.add(code);
         event.preventDefault();
