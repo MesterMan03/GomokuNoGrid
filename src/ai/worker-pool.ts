@@ -73,7 +73,7 @@ export class MinimaxWorkerPool {
             const cleanup = () => {
                 worker.removeEventListener("message", messageHandler);
                 worker.removeEventListener("error", errorHandler);
-                if (timeoutId !== undefined) clearTimeout(timeoutId);
+                clearTimeout(timeoutId);
             };
 
             const messageHandler = (e: MessageEvent) => {

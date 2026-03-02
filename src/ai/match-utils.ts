@@ -65,6 +65,10 @@ export async function playMatch(
         // First reply failed — try random fallback placement
         let placed = false;
         const points = game.getPoints();
+        if (points.length === 0) {
+            onUpdate?.(points, game.getState());
+            return Math.max(-1, Math.min(1, evaluatePosition(game, 0) / 1000));
+        }
         for (let attempt = 0; attempt < 50; attempt++) {
             const target = points[Math.floor(Math.random() * points.length)]!;
             const angle = Math.random() * Math.PI * 2;
