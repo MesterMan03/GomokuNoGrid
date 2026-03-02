@@ -129,7 +129,7 @@ export class DebugDrawer {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
         const lines: string[] = [];
-        lines.push(`[DEBUG]  \`  toggle  |  N  step  |  1  linegroups: ${this.settings.showLineGroups ? "ON" : "OFF"}  |  2  win eval: ${this.settings.showWinEvaluation ? "ON" : "OFF"}  |  3  AI phases: ${this.settings.showAIPhases ? "ON" : "OFF"}`);
+        lines.push(`[DEBUG]  \`toggle  N step  1 lines:${this.settings.showLineGroups ? "ON" : "OFF"}  2 eval:${this.settings.showWinEvaluation ? "ON" : "OFF"}  3 phases:${this.settings.showAIPhases ? "ON" : "OFF"}  E export  I import`);
         if (this.currentPhase) {
             lines.push(`Phase ${this.phaseIndex + 1}/${this.phaseQueue.length}: ${this.currentPhase.title}`);
             lines.push(this.currentPhase.description);

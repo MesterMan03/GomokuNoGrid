@@ -103,11 +103,33 @@ window.addEventListener("keydown", (event) => {
             return;
         }
     }
-    // Debug toggle keys 1, 2, 3
+    // Debug toggle keys 1, 2, 3 and dump/load E, I
     if (debugDrawer.enabled) {
         if (code === "Digit1") { debugDrawer.toggleSetting("showLineGroups"); event.preventDefault(); return; }
         if (code === "Digit2") { debugDrawer.toggleSetting("showWinEvaluation"); event.preventDefault(); return; }
         if (code === "Digit3") { debugDrawer.toggleSetting("showAIPhases"); event.preventDefault(); return; }
+        if (code === "KeyE") {
+            const dump = game.dump();
+            navigator.clipboard.writeText(JSON.stringify(dump)).then(() => {
+                console.log("Game state exported to clipboard");
+            });
+            event.preventDefault();
+            return;
+        }
+        if (code === "KeyI") {
+            navigator.clipboard.readText().then(text => {
+                try {
+                    const dump = JSON.parse(text);
+                    game = Game.load(dump);
+                    currentPlayer = game.getPoints().length % 2 === 0 ? 0 : 1;
+                    console.log("Game state imported from clipboard");
+                } catch (e) {
+                    console.error("Failed to import game state:", e);
+                }
+            });
+            event.preventDefault();
+            return;
+        }
     }
 
     if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {

@@ -5,8 +5,7 @@ import {
     MAX_PLACEMENT_DISTANCE,
     PERPENDICULAR_TOLERANCE, SCALE,
     SYMBOL_RADIUS,
-    WIN_ANGLE_STEP, WIN_D_MAX,
-    WIN_SEARCH_RADIUS
+    WIN_ANGLE_STEP, WIN_D_MAX
 } from "./consts.ts";
 
 /**
@@ -39,6 +38,11 @@ export enum GameState {
     ONGOING,
     WIN_0,
     WIN_1
+}
+
+export interface GameDump {
+    points: Array<{ x: number; y: number; player: Player }>;
+    state: GameState;
 }
 
 export class Game {
@@ -78,18 +82,19 @@ export class Game {
      */
     static fromPoints(points: ReadonlyArray<{ x: number; y: number; player: Player }>): Game {
         const game = new Game();
+        const pts0: Point[] = [];
+        const pts1: Point[] = [];
         for (const p of points) {
             const point: Point = { x: p.x, y: p.y, player: p.player };
             game.points.push(point);
-            if (p.player === 0) {
-                game.tree0.insert(point);
-                game.points0.push(point);
-            } else {
-                game.tree1.insert(point);
-                game.points1.push(point);
-            }
+            if (p.player === 0) pts0.push(point);
+            else pts1.push(point);
         }
-        // Build line groups once at the end (not once per addMove)
+        game.points0 = pts0;
+        game.points1 = pts1;
+        // Build balanced KD-trees from arrays (instead of inserting one by one)
+        game.tree0 = new kdTree(pts0, distance, ["x", "y"]);
+        game.tree1 = new kdTree(pts1, distance, ["x", "y"]);
         game.updateLineGroups(0);
         game.updateLineGroups(1);
         return game;
@@ -122,6 +127,23 @@ export class Game {
             stones: new Set(g.stones),
         }));
         return copy;
+    }
+
+    dump(): GameDump {
+        return {
+            points: this.points.map(p => ({ x: p.x, y: p.y, player: p.player })),
+            state: this.state,
+        };
+    }
+
+    static load(dump: GameDump): Game {
+        const game = Game.fromPoints(dump.points);
+        game.state = dump.state;
+        if (dump.state !== GameState.ONGOING) {
+            const player: Player = dump.state === GameState.WIN_0 ? 0 : 1;
+            game.findWinningSegment(player);
+        }
+        return game;
     }
 
     addMove(x: number, y: number, player: Player): Point | null {
@@ -163,8 +185,8 @@ export class Game {
         // update line groups for the new stone
         this.updateLineGroups(point.player);
 
-        // check for win condition
-        if(this.checkWin(point)) {
+        // check for win condition using line groups
+        if(this.findWinningSegment(point.player)) {
             this.state = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
             console.log(`Player ${player} wins!`);
         }
@@ -177,101 +199,6 @@ export class Game {
         const nearest = tree.nearest(point, count);
         if(nearest.length === 0) return null;
         return nearest.map(([p, _]) => p);
-    }
-
-    checkWin(point: Point): boolean {
-        const player = point.player;
-
-        // get nearby points for the same player
-        const tree = player === 0 ? this.tree0 : this.tree1;
-        const nearby = tree.nearest(point, this.points.length, WIN_SEARCH_RADIUS).filter(p => p[0].x !== point.x || p[0].y !== point.y);
-        if(nearby.length < 4) return false; // not enough points to win
-
-        const testedAngles = new Set<number>();
-
-        // for each nearby point, define a candidate direction
-        for(const [otherPoint] of nearby) {
-            const dx = otherPoint.x - point.x;
-            const dy = otherPoint.y - point.y;
-
-            const length = Math.sqrt(dx * dx + dy * dy);
-            if(length <= EPSILON) continue
-
-            const ux = dx / length;
-            const uy = dy / length;
-
-            // quantize angle
-            const angle = Math.atan2(uy, ux);
-            const bucket = Math.round(angle / WIN_ANGLE_STEP);
-
-            if(testedAngles.has(bucket)) continue; // already tested this direction
-            testedAngles.add(bucket);
-
-            // collect aligned points
-            const aligned = new Set<Point>();
-            aligned.add(point);
-
-            for(const [candidate] of nearby) {
-                const vx = candidate.x - point.x;
-                const vy = candidate.y - point.y;
-
-                // perpendicular distance using cross product
-                const perp = Math.abs(vx * uy - vy * ux);
-
-                if(perp <= PERPENDICULAR_TOLERANCE) aligned.add(candidate);
-                else console.debug("Rejected point for alignment:", candidate, "perpendicular distance:", perp);
-            }
-
-            console.debug("Aligned points:", Array.from(aligned));
-            if(aligned.size < 5) continue; // not enough aligned points
-
-            // project to 1d
-            const projections = new Array<number>();
-
-            for(const p of aligned) {
-                const tx = p.x - point.x;
-                const ty = p.y - point.y;
-
-                const t = tx * ux + ty * uy; // dot product
-                projections.push(t);
-            }
-
-            // sort projections in ascending order
-            projections.sort((a, b) => a - b);
-
-            console.debug("Projections:", projections);
-
-            // check spacing constraint
-            let consecutiveCount = 1;
-            for(let i = 0; i < projections.length - 1; i++) {
-                const nextProj = projections[i + 1];
-                const currentProj = projections[i];
-                console.debug("Checking projections:", currentProj, nextProj);
-                if(nextProj == null || currentProj == null) continue;
-
-                const delta = nextProj - currentProj;
-                if(delta <= WIN_D_MAX) {
-                    consecutiveCount++;
-                    console.debug("Valid spacing between projections:", currentProj, nextProj, "delta:", delta, "consecutiveCount:", consecutiveCount);
-                    // win condition met
-                    if(consecutiveCount >= 5) {
-                        // set the first and last of the winning points for highlighting
-                        const sortedAligned = Array.from(aligned).sort((a, b) => {
-                            const ta = (a.x - point.x) * ux + (a.y - point.y) * uy;
-                            const tb = (b.x - point.x) * ux + (b.y - point.y) * uy;
-                            return ta - tb;
-                        });
-                        this.winPoints = [sortedAligned[0]!, sortedAligned[sortedAligned.length - 1]!];
-                        return true;
-                    }
-                } else {
-                    console.debug("Invalid spacing between projections:", currentProj, nextProj, "delta:", delta, "resetting consecutive count");
-                    consecutiveCount = 1; // reset count if spacing is not valid
-                }
-            }
-        }
-
-        return false;
     }
 
     getPlayerPoints(player: Player): Point[] {
@@ -297,35 +224,59 @@ export class Game {
         return nearest[0]![1] <= MAX_PLACEMENT_DISTANCE;
     }
 
+    /**
+     * Check if any line group for the given player has 5+ consecutive stones.
+     * Sets winPoints to the endpoints of the winning segment if found.
+     */
+    private findWinningSegment(player: Player): boolean {
+        const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
+        for (const group of groups) {
+            if (group.projections.length < 5) continue;
+
+            let run = 1;
+            let runStartIdx = 0;
+            for (let i = 0; i < group.projections.length - 1; i++) {
+                if (group.projections[i + 1]! - group.projections[i]! <= WIN_D_MAX) {
+                    run++;
+                    if (run >= 5) {
+                        // Find stone objects sorted by projection for win endpoints
+                        const sorted = Array.from(group.stones).sort((a, b) => {
+                            const ta = (a.x - group.originX) * group.dirX + (a.y - group.originY) * group.dirY;
+                            const tb = (b.x - group.originX) * group.dirX + (b.y - group.originY) * group.dirY;
+                            return ta - tb;
+                        });
+                        this.winPoints = [sorted[runStartIdx]!, sorted[i + 1]!];
+                        return true;
+                    }
+                } else {
+                    run = 1;
+                    runStartIdx = i + 1;
+                }
+            }
+        }
+        return false;
+    }
+
     private updateLineGroups(player: Player): void {
         const tree = player === 0 ? this.tree0 : this.tree1;
         const points = player === 0 ? this.points0 : this.points1;
         const groups = player === 0 ? this.lineGroups0 : this.lineGroups1;
 
-        // due to line groups being very fragile and complex, simply rebuild all groups from scratch for the affected player after each move
         groups.length = 0;
+        const seenGroups = new Set<string>();
 
-        for(const point of points) {
+        for (const point of points) {
             const nearby = tree.nearest(point, 50, LINE_GROUP_SEARCH_RADIUS)
-                .filter(([p]) => {
-                    if(p === point) return false;
+                .filter(([p]) => p !== point);
 
-                    // don't consider neighbors that are already in the same group as the current point to avoid creating duplicate groups
-                    for(const group of groups) {
-                        if(group.stones.has(point) && group.stones.has(p)) {
-                            return false;
-                        }
-                    }
-
-                    return true;
-                });
+            const testedBuckets = new Set<number>();
 
             for (const [neighbor] of nearby) {
                 const dx = neighbor.x - point.x;
                 const dy = neighbor.y - point.y;
                 const len = Math.sqrt(dx * dx + dy * dy);
                 if (len <= EPSILON) continue;
-                if (len > WIN_D_MAX) continue; // don't create line groups with distant neighbors to limit the number of groups
+                if (len > WIN_D_MAX) continue;
 
                 let ux = dx / len;
                 let uy = dy / len;
@@ -343,74 +294,71 @@ export class Game {
                 }
                 const bucket = Math.round(angle / WIN_ANGLE_STEP);
 
-                // find every other point collinear to the current point and neighbor
-                const collinear = new Set<Point>();
-                collinear.add(point);
-                collinear.add(neighbor);
+                // skip already-tested directions from this point
+                if (testedBuckets.has(bucket)) continue;
+                testedBuckets.add(bucket);
+
+                // find all collinear points in the nearby set
+                const collinear: Array<{ point: Point; proj: number }> = [];
+                collinear.push({ point, proj: 0 });
 
                 for (const [candidate] of nearby) {
-                    if (candidate === neighbor) continue;
-
+                    if (candidate === point) continue;
                     const vx = candidate.x - point.x;
                     const vy = candidate.y - point.y;
-
-                    // perpendicular distance using cross product
                     const perp = Math.abs(vx * uy - vy * ux);
-
-                    if (perp <= PERPENDICULAR_TOLERANCE) collinear.add(candidate);
+                    if (perp <= PERPENDICULAR_TOLERANCE) {
+                        const proj = vx * ux + vy * uy;
+                        collinear.push({ point: candidate, proj });
+                    }
                 }
 
-                // create a projection of the collinear points
-                const projections = new Array<{ point: Point; proj: number }>();
-                for (const p of collinear) {
-                    const tx = p.x - point.x;
-                    const ty = p.y - point.y;
-                    const proj = tx * ux + ty * uy; // dot product
-                    projections.push({ point: p, proj });
-                }
+                // sort by projection
+                collinear.sort((a, b) => a.proj - b.proj);
 
-                // sort projections in ascending order
-                projections.sort((a, b) => a.proj - b.proj);
-
-                // find all points on this line that are close enough to be considered a group
-                const groupsToCreate: Point[][] = [];
-                const potentialGroup = new Set<Point>();
-                for(let i = 0; i < projections.length - 1; i++) {
-                    const current = projections[i]!;
-                    const next = projections[i + 1]!;
-                    if(next.proj - current.proj <= WIN_D_MAX) {
-                        potentialGroup.add(current.point);
-                        potentialGroup.add(next.point);
-                    } else {
-                        // create the new group and reset for the next segment
-                        potentialGroup.add(current.point);
-                        if(potentialGroup.size >= 2) {
-                            groupsToCreate.push(Array.from(potentialGroup))
+                // split into consecutive segments (gap ≤ WIN_D_MAX)
+                let segStart = 0;
+                for (let i = 0; i < collinear.length - 1; i++) {
+                    if (collinear[i + 1]!.proj - collinear[i]!.proj > WIN_D_MAX) {
+                        if (i - segStart + 1 >= 2) {
+                            this.addGroupIfNew(groups, seenGroups, collinear.slice(segStart, i + 1), ux, uy, bucket);
                         }
-                        potentialGroup.clear();
+                        segStart = i + 1;
                     }
                 }
-
-                if(potentialGroup.size >= 2) {
-                    groupsToCreate.push(Array.from(potentialGroup));
-                }
-                for(const groupPoints of groupsToCreate) {
-                    const group: LineGroup = {
-                        dirX: ux,
-                        dirY: uy,
-                        angleBucket: bucket,
-                        originX: groupPoints[0]!.x,
-                        originY: groupPoints[0]!.y,
-                        projections: groupPoints.map(p => {
-                            const tx = p.x - groupPoints[0]!.x;
-                            const ty = p.y - groupPoints[0]!.y;
-                            return tx * ux + ty * uy; // dot product
-                        }).sort((a, b) => a - b),
-                        stones: new Set(groupPoints),
-                    }
-                    groups.push(group);
+                // last segment
+                if (collinear.length - segStart >= 2) {
+                    this.addGroupIfNew(groups, seenGroups, collinear.slice(segStart), ux, uy, bucket);
                 }
             }
         }
+    }
+
+    private addGroupIfNew(
+        groups: LineGroup[],
+        seen: Set<string>,
+        segment: Array<{ point: Point; proj: number }>,
+        ux: number, uy: number, bucket: number,
+    ): void {
+        // canonical key from sorted coordinates to deduplicate
+        const key = segment
+            .map(s => `${s.point.x},${s.point.y}`)
+            .sort()
+            .join("|");
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        const origin = segment[0]!.point;
+        groups.push({
+            dirX: ux,
+            dirY: uy,
+            angleBucket: bucket,
+            originX: origin.x,
+            originY: origin.y,
+            projections: segment.map(s => {
+                return (s.point.x - origin.x) * ux + (s.point.y - origin.y) * uy;
+            }).sort((a, b) => a - b),
+            stones: new Set(segment.map(s => s.point)),
+        });
     }
 }
