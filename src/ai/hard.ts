@@ -456,6 +456,13 @@ export class HardAI implements AI {
     /**
      * Lightweight tier estimation from line group size, without cloning the game.
      * Used at inner minimax nodes to avoid the expensive classifyThreat() clone.
+     *
+     * This is a heuristic approximation that intentionally overestimates threat
+     * levels compared to classifyThreat(), since it cannot verify open ends or
+     * actual connectivity after placement. Overestimation is acceptable because
+     * it causes conservative behavior (searching more deeply) rather than missing
+     * real threats. The trade-off is slightly more nodes searched vs the massive
+     * reduction from eliminating game cloning at every inner node.
      */
     private estimateTier(groupSize: number, isOffensive: boolean): ThreatTier {
         // Offensive: extending a group of N creates N+1; blocking is about the existing threat
@@ -495,7 +502,8 @@ export class HardAI implements AI {
             score += this.config.forkBonus * (aiForkLines - 1);
         }
 
-        // Positional clustering bonus (capped to avoid O(n²) explosion)
+        // Positional clustering bonus (capped to first N stones to avoid O(n²) explosion;
+        // early-placement bias is acceptable for this small bonus term)
         const aiPoints = state.getPlayerPoints(aiPlayer);
         if (aiPoints.length > 1) {
             const sampleSize = Math.min(aiPoints.length, CLUSTER_SAMPLE_SIZE);
