@@ -1,4 +1,4 @@
-import { SCALE } from "./consts.ts";
+import { IDEAL_SPACING, SCALE } from "./consts.ts";
 import { Game, GameState, type Player } from "./game.ts";
 import type { AI } from "./ai/types.ts";
 import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
@@ -45,7 +45,22 @@ function isAnyPressed(keys: Set<string>) {
     return false;
 }
 
+let gameRunning = false;
+
+function startGame() {
+    if (!gameRunning) {
+        gameRunning = true;
+        requestAnimationFrame(draw);
+    }
+}
+
+function stopGame() {
+    gameRunning = false;
+}
+
 function draw() {
+    if (!gameRunning) return;
+
     const moveUp = isAnyPressed(PAN_UP);
     const moveDown = isAnyPressed(PAN_DOWN);
     const moveLeft = isAnyPressed(PAN_LEFT);
@@ -272,7 +287,7 @@ modeSelect.addEventListener("click", (event) => {
     canvas.style.display = "block";
     game = new Game();
     currentPlayer = 0;
-    requestAnimationFrame(draw);
+    startGame();
 });
 
 // ---------- AI vs AI ----------
@@ -294,10 +309,17 @@ let aivaiMoveCount = 0;
 
 const AIVAI_AUTO_DELAY_MS = 50;
 
+let aivaiMinimaxPool: MinimaxWorkerPool | null = null;
+
 function createAIForDifficulty(difficulty: string): AI {
     switch (difficulty) {
         case "easy": return new EasyAI();
-        case "normal": return new MediumAI();
+        case "normal": {
+            if (!aivaiMinimaxPool) {
+                aivaiMinimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+            }
+            return new MediumAI(undefined, aivaiMinimaxPool);
+        }
         case "hard": return new HardAI();
         default: return new EasyAI();
     }
@@ -344,6 +366,11 @@ async function aivaiDoNextMove() {
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         const aiMove = await currentAI.getMove(game, currentPlayer);
+        // Guard against quit during await
+        if (!aivaiActive || !aivaiAIs) {
+            aivaiThinking = false;
+            return;
+        }
         if (game.addMove(aiMove.x, aiMove.y, currentPlayer)) {
             moveAccepted = true;
             break;
@@ -356,13 +383,22 @@ async function aivaiDoNextMove() {
         for (let attempt = 0; attempt < 100; attempt++) {
             const target = points[Math.floor(Math.random() * points.length)]!;
             const angle = Math.random() * Math.PI * 2;
-            const dist = 25 + Math.random() * 15;
+            const dist = IDEAL_SPACING + Math.random() * (IDEAL_SPACING * 0.5);
             const fx = target.x / SCALE + Math.cos(angle) * dist;
             const fy = target.y / SCALE + Math.sin(angle) * dist;
             if (game.addMove(fx, fy, currentPlayer)) {
+                moveAccepted = true;
                 break;
             }
         }
+    }
+
+    if (!moveAccepted) {
+        aivaiThinking = false;
+        aivaiNextBtn.disabled = false;
+        aivaiStatus.textContent = `⚠ ${symbol} (${diff}) failed to place a move. Game stalled.`;
+        aivaiStopAutoPlay();
+        return;
     }
 
     aivaiMoveCount++;
@@ -401,7 +437,7 @@ document.getElementById("aivai-start")?.addEventListener("click", () => {
     aivaiNextBtn.disabled = false;
     aivaiAutoBtn.disabled = false;
     aivaiUpdateStatus();
-    requestAnimationFrame(draw);
+    startGame();
 });
 
 document.getElementById("aivai-back")?.addEventListener("click", () => {
@@ -427,6 +463,9 @@ aivaiQuitBtn.addEventListener("click", () => {
     aivaiStopAutoPlay();
     aivaiActive = false;
     aivaiAIs = null;
+    aivaiMinimaxPool?.terminate();
+    aivaiMinimaxPool = null;
+    stopGame();
     aivaiHud.style.display = "none";
     canvas.style.display = "none";
     modeSelect.style.display = "flex";
