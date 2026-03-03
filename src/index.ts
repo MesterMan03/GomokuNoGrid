@@ -1,10 +1,11 @@
 import { IDEAL_SPACING, SCALE } from "./consts.ts";
 import { Game, GameState, type Player } from "./game.ts";
 import type { AI } from "./ai/types.ts";
-import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
+import { DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, DEFAULT_INSANE_CONFIG } from "./ai/types.ts";
 import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
 import { HardAI } from "./ai/hard.ts";
+import { InsaneAI } from "./ai/insane.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
 import { DEFAULT_EVOLUTION_PARAMS, runEvolution, type GameUpdate } from "./ai/evolution.ts";
@@ -265,12 +266,16 @@ modeSelect.addEventListener("click", (event) => {
         minimaxPool = null;
     } else if (mode === "normal") {
         minimaxPool?.terminate();
-        minimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+        minimaxPool = new MinimaxWorkerPool("normal", DEFAULT_MEDIUM_CONFIG);
         ai = new MediumAI(undefined, minimaxPool);
     } else if (mode === "hard") {
         minimaxPool?.terminate();
-        minimaxPool = null;
-        ai = new HardAI();
+        minimaxPool = new MinimaxWorkerPool("hard", DEFAULT_HARD_CONFIG);
+        ai = new HardAI(undefined, minimaxPool);
+    } else if (mode === "insane") {
+        minimaxPool?.terminate();
+        minimaxPool = new MinimaxWorkerPool("insane", DEFAULT_INSANE_CONFIG);
+        ai = new InsaneAI(undefined, minimaxPool);
     } else if (mode === "aivai") {
         modeSelect.style.display = "none";
         aivaiPanel.style.display = "block";
@@ -316,11 +321,12 @@ function createAIForDifficulty(difficulty: string): AI {
         case "easy": return new EasyAI();
         case "normal": {
             if (!aivaiMinimaxPool) {
-                aivaiMinimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+                aivaiMinimaxPool = new MinimaxWorkerPool("normal", DEFAULT_MEDIUM_CONFIG);
             }
             return new MediumAI(undefined, aivaiMinimaxPool);
         }
         case "hard": return new HardAI();
+        case "insane": return new InsaneAI();
         default: return new EasyAI();
     }
 }

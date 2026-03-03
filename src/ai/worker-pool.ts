@@ -15,7 +15,7 @@ export class MinimaxWorkerPool {
     private workers: Worker[];
     private nextId = 0;
 
-    constructor(config: Record<string, number>, numWorkers?: number) {
+    constructor(difficulty: string, config: Record<string, number>, numWorkers?: number) {
         const count = numWorkers ?? Math.min(navigator.hardwareConcurrency || 4, 8);
         this.workers = [];
         for (let i = 0; i < count; i++) {
@@ -23,14 +23,14 @@ export class MinimaxWorkerPool {
                 new URL("../minimax.worker.js", import.meta.url),
                 { type: "module" },
             );
-            w.postMessage({ type: "init", config });
+            w.postMessage({ type: "init", difficulty, config });
             this.workers.push(w);
         }
     }
 
-    updateConfig(config: Record<string, number>): void {
+    updateConfig(difficulty: string, config: Record<string, number>): void {
         for (const w of this.workers) {
-            w.postMessage({ type: "init", config });
+            w.postMessage({ type: "init", difficulty, config });
         }
     }
 

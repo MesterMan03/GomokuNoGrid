@@ -135,6 +135,74 @@ export const DEFAULT_HARD_CONFIG: HardAIConfig = {
     defensePenalty: 4752.618878313149
 };
 
+/** Configurable weights for the insane AI (MCTS + heuristic hybrid). */
+export interface InsaneAIConfig {
+    [key: string]: number;
+    /** UCB1 exploration constant (lower = more exploitation) */
+    explorationC: number;
+    /** Maximum MCTS iterations */
+    maxIterations: number;
+    /** Root-level candidate limit */
+    rootCandidateLimit: number;
+    /** Internal node candidate limit */
+    internalCandidateLimit: number;
+    /** Guided rollout depth (plies) */
+    rolloutDepth: number;
+    /** Softmax temperature for rollout move selection */
+    rolloutTemperature: number;
+    /** Selective deepening bonus for critical positions */
+    depthExtension: number;
+    /** Maximum search depth (for selective deepening) */
+    maxSearchDepth: number;
+    /** Threat score: open-4 */
+    threatOpen4: number;
+    /** Threat score: double threat (fork) */
+    threatDoubleThreat: number;
+    /** Threat score: open-3 */
+    threatOpen3: number;
+    /** Bonus for fork formations */
+    forkBonus: number;
+    /** Line weight for 2-stone groups */
+    lineWeight2: number;
+    /** Line weight for 3-stone groups */
+    lineWeight3: number;
+    /** Line weight for 4-stone groups */
+    lineWeight4: number;
+    /** Open-end multiplier */
+    openFactor: number;
+    /** Opponent evaluation bias */
+    opponentBias: number;
+    /** Clustering decay */
+    clusteringDecay: number;
+    /** Clustering weight */
+    clusteringWeight: number;
+    /** Defense penalty for opponent open-4 */
+    defensePenalty: number;
+}
+
+export const DEFAULT_INSANE_CONFIG: InsaneAIConfig = {
+    explorationC: 0.4,
+    maxIterations: 40000,
+    rootCandidateLimit: 10,
+    internalCandidateLimit: 6,
+    rolloutDepth: 10,
+    rolloutTemperature: 0.5,
+    depthExtension: 2,
+    maxSearchDepth: 8,
+    threatOpen4: 10000,
+    threatDoubleThreat: 3000,
+    threatOpen3: 800,
+    forkBonus: 1500,
+    lineWeight2: 10,
+    lineWeight3: 300,
+    lineWeight4: 5000,
+    openFactor: 3.0,
+    opponentBias: 2.0,
+    clusteringDecay: 20,
+    clusteringWeight: 5,
+    defensePenalty: 5000,
+};
+
 /** Registry entry for an evolvable AI difficulty. */
 export interface AIDefinition {
     defaultConfig: Record<string, number>;
