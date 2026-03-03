@@ -331,12 +331,12 @@ export class InsaneAI implements AI {
         if (this.workerPool) {
             const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
             const result = await this.workerPool.search(gamePoints, player);
-            this.debugPhases = result.debugPhases as DebugPhase[];
+            this.debugPhases = result.debugPhases;
             return {
                 x: result.x,
                 y: result.y,
                 score: result.score,
-                reason: result.reason as MoveReason,
+                reason: result.reason,
             };
         }
 

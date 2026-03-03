@@ -1,4 +1,5 @@
 import type { GameUpdate } from "./evolution.ts";
+import type { DebugPhase, MoveReason } from "./types.ts";
 
 // ── Minimax Worker Pool ─────────────────────────────────────────────────
 
@@ -118,13 +119,8 @@ export interface MCTSResult {
     x: number;
     y: number;
     score: number;
-    reason: string;
-    debugPhases: Array<{
-        title: string;
-        description: string;
-        markers: Array<{ x: number; y: number; color: string; label?: string; radius?: number }>;
-        lines: Array<{ x1: number; y1: number; x2: number; y2: number; color: string; dashed?: boolean }>;
-    }>;
+    reason: MoveReason;
+    debugPhases: DebugPhase[];
 }
 
 /**
