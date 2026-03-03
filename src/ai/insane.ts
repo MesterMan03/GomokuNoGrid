@@ -5,6 +5,8 @@ import type { MinimaxWorkerPool } from "./worker-pool.ts";
 
 const WIN_SCORE = 100_000;
 const CLUSTER_SAMPLE_SIZE = 8;
+const MCTS_TIME_LIMIT_MS = 350;
+const WORKER_TIME_LIMIT_MS = 200;
 
 // ── Line analysis helpers (shared with hard.ts pattern) ─────────────────
 
@@ -354,8 +356,8 @@ export class InsaneAI implements AI {
         }
 
         // Root parallelization: run focused MCTS for this one candidate
-        const iterationsPerCandidate = Math.floor(this.config.maxIterations / this.config.rootCandidateLimit);
-        const reward = this.runMCTS(child, player, aiWin, iterationsPerCandidate, 200);
+        const iterationsPerCandidate = Math.max(1, Math.floor(this.config.maxIterations / Math.max(1, this.config.rootCandidateLimit)));
+        const reward = this.runMCTS(child, player, aiWin, iterationsPerCandidate, WORKER_TIME_LIMIT_MS);
         return { score: reward * WIN_SCORE, immediateWin: false };
     }
 
@@ -492,11 +494,10 @@ export class InsaneAI implements AI {
         this.expandNodeWith(root, rootCandidates, aiPlayer);
 
         const maxIter = this.config.maxIterations;
-        const timeLimit = 350;
         const startTime = performance.now();
 
         for (let i = 0; i < maxIter; i++) {
-            if (i > 0 && i % 1000 === 0 && performance.now() - startTime > timeLimit) break;
+            if (i > 0 && i % 1000 === 0 && performance.now() - startTime > MCTS_TIME_LIMIT_MS) break;
 
             // Selection
             let node = root;
@@ -725,6 +726,8 @@ export class InsaneAI implements AI {
         const exps = scores.map(s => Math.exp((s - maxScore) / Math.max(temp, 0.01)));
         const sumExp = exps.reduce((a, b) => a + b, 0);
 
+        if (sumExp <= 0) return candidates[0]!;
+
         const r = Math.random() * sumExp;
         let cumulative = 0;
         for (let i = 0; i < candidates.length; i++) {
@@ -771,7 +774,9 @@ export class InsaneAI implements AI {
                     pairs++;
                 }
             }
-            score += this.config.clusteringWeight * Math.exp(-(totalDist / pairs) / this.config.clusteringDecay);
+            if (pairs > 0) {
+                score += this.config.clusteringWeight * Math.exp(-(totalDist / pairs) / this.config.clusteringDecay);
+            }
         }
 
         return score;
