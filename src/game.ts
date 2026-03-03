@@ -194,6 +194,43 @@ export class Game {
         return point;
     }
 
+    /**
+     * Remove the last move and rebuild internal state.
+     * Works even after the game has ended (win state).
+     * Returns the removed point, or null if no moves to undo.
+     */
+    undo(): Point | null {
+        if (this.points.length === 0) return null;
+
+        const removed = this.points.pop()!;
+
+        // Remove from per-player array
+        if (removed.player === 0) {
+            this.points0.pop();
+        } else {
+            this.points1.pop();
+        }
+
+        // Rebuild KD-trees from remaining points
+        this.tree0 = new kdTree(this.points0.slice(), distance, ["x", "y"]);
+        this.tree1 = new kdTree(this.points1.slice(), distance, ["x", "y"]);
+
+        // Rebuild line groups
+        this.updateLineGroups(0);
+        this.updateLineGroups(1);
+
+        // Re-evaluate game state
+        this.state = GameState.ONGOING;
+        this.winPoints = [];
+        if (this.findWinningSegment(0)) {
+            this.state = GameState.WIN_0;
+        } else if (this.findWinningSegment(1)) {
+            this.state = GameState.WIN_1;
+        }
+
+        return removed;
+    }
+
     getClosestPlayerPoint(point: Point, count: number = 1): Point[] | null {
         const tree = point.player === 0 ? this.tree0 : this.tree1;
         const nearest = tree.nearest(point, count);

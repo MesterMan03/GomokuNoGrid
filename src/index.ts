@@ -1,9 +1,10 @@
-import { SCALE } from "./consts.ts";
+import { IDEAL_SPACING, SCALE } from "./consts.ts";
 import { Game, GameState, type Player } from "./game.ts";
 import type { AI } from "./ai/types.ts";
 import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
 import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
+import { HardAI } from "./ai/hard.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
 import { DEFAULT_EVOLUTION_PARAMS, runEvolution, type GameUpdate } from "./ai/evolution.ts";
@@ -44,7 +45,22 @@ function isAnyPressed(keys: Set<string>) {
     return false;
 }
 
+let gameRunning = false;
+
+function startGame() {
+    if (!gameRunning) {
+        gameRunning = true;
+        requestAnimationFrame(draw);
+    }
+}
+
+function stopGame() {
+    gameRunning = false;
+}
+
 function draw() {
+    if (!gameRunning) return;
+
     const moveUp = isAnyPressed(PAN_UP);
     const moveDown = isAnyPressed(PAN_DOWN);
     const moveLeft = isAnyPressed(PAN_LEFT);
@@ -130,6 +146,31 @@ window.addEventListener("keydown", (event) => {
             event.preventDefault();
             return;
         }
+    }
+
+    // ---------- UNDO (Ctrl+Z) ----------
+    if (code === "KeyZ" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        if (aivaiActive || aiThinking) return;
+
+        if (ai) {
+            // vs AI: undo AI's last move (if present), then undo human's move
+            const points = game.getPoints();
+            if (points.length > 0 && points[points.length - 1]!.player === 1) {
+                game.undo(); // undo AI move
+            }
+            if (game.getPoints().length > 0) {
+                game.undo(); // undo human move
+            }
+            currentPlayer = 0;
+        } else {
+            // PvP: undo last move
+            const removed = game.undo();
+            if (removed) {
+                currentPlayer = removed.player;
+            }
+        }
+        return;
     }
 
     if (PAN_UP.has(code) || PAN_DOWN.has(code) || PAN_LEFT.has(code) || PAN_RIGHT.has(code)) {
@@ -226,6 +267,14 @@ modeSelect.addEventListener("click", (event) => {
         minimaxPool?.terminate();
         minimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
         ai = new MediumAI(undefined, minimaxPool);
+    } else if (mode === "hard") {
+        minimaxPool?.terminate();
+        minimaxPool = null;
+        ai = new HardAI();
+    } else if (mode === "aivai") {
+        modeSelect.style.display = "none";
+        aivaiPanel.style.display = "block";
+        return;
     } else if (mode === "training") {
         modeSelect.style.display = "none";
         trainingPanel.style.display = "block";
@@ -238,7 +287,199 @@ modeSelect.addEventListener("click", (event) => {
     canvas.style.display = "block";
     game = new Game();
     currentPlayer = 0;
-    requestAnimationFrame(draw);
+    startGame();
+});
+
+// ---------- AI vs AI ----------
+const aivaiPanel = document.getElementById("aivai-panel") as HTMLDivElement;
+const aivaiHud = document.getElementById("aivai-hud") as HTMLDivElement;
+const aivaiStatus = document.getElementById("aivai-status") as HTMLSpanElement;
+const aivaiNextBtn = document.getElementById("aivai-next") as HTMLButtonElement;
+const aivaiAutoBtn = document.getElementById("aivai-auto") as HTMLButtonElement;
+const aivaiQuitBtn = document.getElementById("aivai-quit") as HTMLButtonElement;
+const aivaiPlayer0Select = document.getElementById("aivai-player0") as HTMLSelectElement;
+const aivaiPlayer1Select = document.getElementById("aivai-player1") as HTMLSelectElement;
+
+let aivaiActive = false;
+let aivaiAIs: [AI, AI] | null = null;
+let aivaiThinking = false;
+let aivaiAutoPlay = false;
+let aivaiAutoTimer: ReturnType<typeof setTimeout> | null = null;
+let aivaiMoveCount = 0;
+
+const AIVAI_AUTO_DELAY_MS = 50;
+
+let aivaiMinimaxPool: MinimaxWorkerPool | null = null;
+
+function createAIForDifficulty(difficulty: string): AI {
+    switch (difficulty) {
+        case "easy": return new EasyAI();
+        case "normal": {
+            if (!aivaiMinimaxPool) {
+                aivaiMinimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+            }
+            return new MediumAI(undefined, aivaiMinimaxPool);
+        }
+        case "hard": return new HardAI();
+        default: return new EasyAI();
+    }
+}
+
+function aivaiUpdateStatus() {
+    if (game.getState() !== GameState.ONGOING) {
+        const winner = game.getState() === GameState.WIN_0 ? "X" : "O";
+        const winDiff = game.getState() === GameState.WIN_0
+            ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+        aivaiStatus.textContent = `🏆 Player ${winner} (${winDiff}) wins after ${aivaiMoveCount} moves!`;
+        aivaiNextBtn.disabled = true;
+        aivaiAutoBtn.disabled = true;
+        aivaiStopAutoPlay();
+        return;
+    }
+    const symbol = currentPlayer === 0 ? "X" : "O";
+    const diff = currentPlayer === 0 ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+    aivaiStatus.textContent = `Move ${aivaiMoveCount + 1} — ${symbol} (${diff})'s turn.  Press Space or click Next Move`;
+}
+
+function aivaiStopAutoPlay() {
+    aivaiAutoPlay = false;
+    if (aivaiAutoTimer !== null) {
+        clearTimeout(aivaiAutoTimer);
+        aivaiAutoTimer = null;
+    }
+    aivaiAutoBtn.textContent = "▶ Auto";
+}
+
+async function aivaiDoNextMove() {
+    if (!aivaiActive || !aivaiAIs || aivaiThinking) return;
+    if (game.getState() !== GameState.ONGOING) return;
+
+    aivaiThinking = true;
+    aivaiNextBtn.disabled = true;
+    const symbol = currentPlayer === 0 ? "X" : "O";
+    const diff = currentPlayer === 0 ? aivaiPlayer0Select.value : aivaiPlayer1Select.value;
+    aivaiStatus.textContent = `Move ${aivaiMoveCount + 1} — ${symbol} (${diff}) thinking…`;
+
+    const currentAI = aivaiAIs[currentPlayer];
+    const maxRetries = 5;
+    let moveAccepted = false;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const aiMove = await currentAI.getMove(game, currentPlayer);
+        // Guard against quit during await
+        if (!aivaiActive || !aivaiAIs) {
+            aivaiThinking = false;
+            return;
+        }
+        if (game.addMove(aiMove.x, aiMove.y, currentPlayer)) {
+            moveAccepted = true;
+            break;
+        }
+    }
+
+    if (!moveAccepted) {
+        // fallback: place a random valid move near existing stones
+        const points = game.getPoints();
+        for (let attempt = 0; attempt < 100; attempt++) {
+            const target = points[Math.floor(Math.random() * points.length)]!;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = IDEAL_SPACING + Math.random() * (IDEAL_SPACING * 0.5);
+            const fx = target.x / SCALE + Math.cos(angle) * dist;
+            const fy = target.y / SCALE + Math.sin(angle) * dist;
+            if (game.addMove(fx, fy, currentPlayer)) {
+                moveAccepted = true;
+                break;
+            }
+        }
+    }
+
+    if (!moveAccepted) {
+        aivaiThinking = false;
+        aivaiNextBtn.disabled = false;
+        aivaiStatus.textContent = `⚠ ${symbol} (${diff}) failed to place a move. Game stalled.`;
+        aivaiStopAutoPlay();
+        return;
+    }
+
+    aivaiMoveCount++;
+    currentPlayer = currentPlayer === 0 ? 1 : 0;
+    aivaiThinking = false;
+    aivaiNextBtn.disabled = false;
+    aivaiUpdateStatus();
+
+    // If auto-play is on and game is still going, schedule next move
+    if (aivaiAutoPlay && game.getState() === GameState.ONGOING) {
+        aivaiAutoTimer = setTimeout(() => aivaiDoNextMove(), AIVAI_AUTO_DELAY_MS);
+    }
+}
+
+document.getElementById("aivai-start")?.addEventListener("click", () => {
+    const ai0 = createAIForDifficulty(aivaiPlayer0Select.value);
+    const ai1 = createAIForDifficulty(aivaiPlayer1Select.value);
+    aivaiAIs = [ai0, ai1];
+    aivaiActive = true;
+    aivaiMoveCount = 0;
+    aivaiThinking = false;
+    aivaiStopAutoPlay();
+
+    game = new Game();
+    currentPlayer = 0;
+
+    // Player X needs to make the first move since the board is empty
+    // Place an initial stone at the center for Player X
+    game.addMove(400, 400, 0);
+    aivaiMoveCount = 1;
+    currentPlayer = 1;
+
+    aivaiPanel.style.display = "none";
+    canvas.style.display = "block";
+    aivaiHud.style.display = "flex";
+    aivaiNextBtn.disabled = false;
+    aivaiAutoBtn.disabled = false;
+    aivaiUpdateStatus();
+    startGame();
+});
+
+document.getElementById("aivai-back")?.addEventListener("click", () => {
+    aivaiPanel.style.display = "none";
+    modeSelect.style.display = "flex";
+});
+
+aivaiNextBtn.addEventListener("click", () => {
+    aivaiDoNextMove();
+});
+
+aivaiAutoBtn.addEventListener("click", () => {
+    if (aivaiAutoPlay) {
+        aivaiStopAutoPlay();
+    } else {
+        aivaiAutoPlay = true;
+        aivaiAutoBtn.textContent = "⏸ Pause";
+        if (!aivaiThinking) aivaiDoNextMove();
+    }
+});
+
+aivaiQuitBtn.addEventListener("click", () => {
+    aivaiStopAutoPlay();
+    aivaiActive = false;
+    aivaiAIs = null;
+    aivaiMinimaxPool?.terminate();
+    aivaiMinimaxPool = null;
+    stopGame();
+    aivaiHud.style.display = "none";
+    canvas.style.display = "none";
+    modeSelect.style.display = "flex";
+});
+
+// Space key triggers next move in AI vs AI mode
+window.addEventListener("keydown", (event) => {
+    if (!aivaiActive) return;
+    if (event.code === "Space") {
+        event.preventDefault();
+        if (!aivaiThinking && game.getState() === GameState.ONGOING) {
+            aivaiDoNextMove();
+        }
+    }
 });
 
 // ---------- TRAINING UI ----------
@@ -338,13 +579,13 @@ trainStartBtn?.addEventListener("click", async () => {
 
     const params = {
         simsPerBatch: parseIntParam("train-sims", DEFAULT_EVOLUTION_PARAMS.simsPerBatch),
-        batches: parseIntParam("train-batches", DEFAULT_EVOLUTION_PARAMS.batches),
+        populationSize: parseIntParam("train-population", DEFAULT_EVOLUTION_PARAMS.populationSize),
+        generations: parseIntParam("train-generations", DEFAULT_EVOLUTION_PARAMS.generations),
         startingMoves: parseIntParam("train-start-moves", DEFAULT_EVOLUTION_PARAMS.startingMoves),
         extraMovesPerGen: parseIntParam("train-extra-moves", DEFAULT_EVOLUTION_PARAMS.extraMovesPerGen),
         mutationRate: parseFloatParam("train-mutation-rate", DEFAULT_EVOLUTION_PARAMS.mutationRate),
         mutationStrength: parseFloatParam("train-mutation-strength", DEFAULT_EVOLUTION_PARAMS.mutationStrength),
         eliteCount: DEFAULT_EVOLUTION_PARAMS.eliteCount,
-        populationSize: DEFAULT_EVOLUTION_PARAMS.populationSize,
     };
     const difficulty = trainDifficulty?.value || "normal";
 
@@ -375,7 +616,7 @@ trainStartBtn?.addEventListener("click", async () => {
                 const canvas = getOrCreateTrainCanvas(update.individualIndex);
                 drawMiniGame(canvas, update.points);
                 const label = canvas.parentElement?.querySelector(".train-canvas-label");
-                if (label) label.textContent = `Gen ${update.gen} | Individual ${update.individualIndex}`;
+                if (label) label.textContent = `Gen ${update.gen} | Batch ${update.individualIndex}`;
             },
             trainAbort.signal,
             matchPool,

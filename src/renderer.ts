@@ -62,6 +62,15 @@ export class Renderer {
             iCtx.arc(point.x / SCALE, point.y / SCALE, SYMBOL_RADIUS * 2, 0, Math.PI * 2);
             iCtx.fill();
         }
+        // draw yellow around the last point to indicate the most recent move
+        const lastPoint = points[points.length - 1];
+        if (lastPoint) {
+            iCtx.strokeStyle = "yellow";
+            iCtx.lineWidth = 2;
+            iCtx.beginPath();
+            iCtx.arc(lastPoint.x / SCALE, lastPoint.y / SCALE, SYMBOL_RADIUS * 2.2, 0, Math.PI * 2);
+            iCtx.stroke();
+        }
 
         ctx.globalAlpha = 0.4;
         ctx.drawImage(this.indicatorCanvas, 0, 0);
