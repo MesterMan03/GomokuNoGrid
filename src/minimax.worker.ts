@@ -1,8 +1,7 @@
 import { Game } from "./game.ts";
 import { MediumAI } from "./ai/medium.ts";
 import { HardAI } from "./ai/hard.ts";
-import { InsaneAI } from "./ai/insane.ts";
-import type { MediumAIConfig, HardAIConfig, InsaneAIConfig } from "./ai/types.ts";
+import type { MediumAIConfig, HardAIConfig } from "./ai/types.ts";
 
 /// <reference lib="webworker" />
 export {};
@@ -24,8 +23,6 @@ self.onmessage = (e: MessageEvent) => {
         const difficulty = msg.difficulty ?? "normal";
         if (difficulty === "hard") {
             ai = new HardAI(msg.config as Partial<HardAIConfig>);
-        } else if (difficulty === "insane") {
-            ai = new InsaneAI(msg.config as Partial<InsaneAIConfig>);
         } else {
             ai = new MediumAI(msg.config as Partial<MediumAIConfig>);
         }

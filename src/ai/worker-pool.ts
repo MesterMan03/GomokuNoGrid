@@ -112,6 +112,124 @@ export class MinimaxWorkerPool {
     }
 }
 
+// ── MCTS Worker Pool ────────────────────────────────────────────────────
+
+export interface MCTSResult {
+    x: number;
+    y: number;
+    score: number;
+    reason: string;
+    debugPhases: Array<{
+        title: string;
+        description: string;
+        markers: Array<{ x: number; y: number; color: string; label?: string; radius?: number }>;
+        lines: Array<{ x1: number; y1: number; x2: number; y2: number; color: string; dashed?: boolean }>;
+    }>;
+}
+
+/**
+ * Pool of Web Workers for MCTS-based search.
+ * Uses root parallelization: all workers independently search the same position,
+ * and the best result is selected.
+ */
+export class MCTSWorkerPool {
+    private workers: Worker[];
+    private nextId = 0;
+
+    constructor(config: Record<string, number>, numWorkers?: number) {
+        const count = numWorkers ?? Math.min(navigator.hardwareConcurrency || 4, 8);
+        this.workers = [];
+        for (let i = 0; i < count; i++) {
+            const w = new Worker(
+                new URL("../mcts.worker.js", import.meta.url),
+                { type: "module" },
+            );
+            w.postMessage({ type: "init", config });
+            this.workers.push(w);
+        }
+    }
+
+    async search(
+        gamePoints: Array<{ x: number; y: number; player: 0 | 1 }>,
+        player: 0 | 1,
+    ): Promise<MCTSResult> {
+        if (this.workers.length === 0) {
+            throw new Error("No MCTS workers available");
+        }
+
+        // Root parallelization: all workers search the same position independently
+        const promises = this.workers.map(w => {
+            const id = this.nextId++;
+            return this.searchOne(w, id, gamePoints, player);
+        });
+        const results = await Promise.all(promises);
+
+        // Select the result with the highest score
+        let best = results[0]!;
+        for (let i = 1; i < results.length; i++) {
+            if (results[i]!.score > best.score) {
+                best = results[i]!;
+            }
+        }
+        return best;
+    }
+
+    private searchOne(
+        worker: Worker,
+        id: number,
+        points: Array<{ x: number; y: number; player: 0 | 1 }>,
+        player: 0 | 1,
+    ): Promise<MCTSResult> {
+        return new Promise((resolve, reject) => {
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+            const cleanup = () => {
+                worker.removeEventListener("message", messageHandler);
+                worker.removeEventListener("error", errorHandler);
+                clearTimeout(timeoutId);
+            };
+
+            const messageHandler = (e: MessageEvent) => {
+                const data = e.data;
+                if (!data || data.id !== id) return;
+                if (data.type === "result") {
+                    cleanup();
+                    resolve({
+                        x: data.x,
+                        y: data.y,
+                        score: data.score,
+                        reason: data.reason,
+                        debugPhases: data.debugPhases ?? [],
+                    });
+                } else if (data.type === "error") {
+                    cleanup();
+                    reject(new Error(typeof data.message === "string" ? data.message : "MCTS worker error"));
+                }
+            };
+
+            const errorHandler = (event: ErrorEvent) => {
+                cleanup();
+                reject(event.error instanceof Error ? event.error : new Error(event.message || "MCTS worker error"));
+            };
+
+            worker.addEventListener("message", messageHandler);
+            worker.addEventListener("error", errorHandler);
+
+            timeoutId = setTimeout(() => {
+                cleanup();
+                reject(new Error(`MCTS worker timed out for search id=${id}`));
+            }, 30_000);
+
+            worker.postMessage({ type: "search", id, points, player });
+        });
+    }
+
+    terminate(): void {
+        for (const w of this.workers) w.terminate();
+        this.workers = [];
+    }
+}
+
 // ── Match Worker Pool ───────────────────────────────────────────────────
 
 export interface MatchTask {

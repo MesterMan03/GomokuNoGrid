@@ -1,12 +1,11 @@
 import { type AI, MoveReason, type ScoredMove, type DebugPhase, type InsaneAIConfig, DEFAULT_INSANE_CONFIG } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
-import type { MinimaxWorkerPool } from "./worker-pool.ts";
+import type { MCTSWorkerPool } from "./worker-pool.ts";
 
 const WIN_SCORE = 100_000;
 const CLUSTER_SAMPLE_SIZE = 8;
 const MCTS_TIME_LIMIT_MS = 350;
-const WORKER_TIME_LIMIT_MS = 200;
 
 // ── Line analysis helpers (shared with hard.ts pattern) ─────────────────
 
@@ -83,24 +82,22 @@ function threatScore(info: ThreatInfo, config: InsaneAIConfig): number {
 function isCriticalPosition(state: Game, player: Player): boolean {
     const opponent: Player = player === 0 ? 1 : 0;
 
+    // Check for open-4 threats (either side)
     for (const group of state.getLineGroups(player)) {
         const info = analyzeLineGroup(group, state);
         if (info.maxRun >= 4 && info.openEnds >= 1) return true;
-        if (info.maxRun >= 3 && info.openEnds >= 1) {
-            let threatLines = 0;
-            for (const g2 of state.getLineGroups(player)) {
-                if (g2 !== group) {
-                    const info2 = analyzeLineGroup(g2, state);
-                    if (info2.maxRun >= 3 && info2.openEnds >= 1) threatLines++;
-                }
-            }
-            if (threatLines >= 1) return true;
-        }
     }
-
     for (const group of state.getLineGroups(opponent)) {
         const info = analyzeLineGroup(group, state);
         if (info.maxRun >= 4 && info.openEnds >= 1) return true;
+    }
+
+    // Check for multi-line fork: two or more open-3 lines
+    let open3Count = 0;
+    for (const group of state.getLineGroups(player)) {
+        const info = analyzeLineGroup(group, state);
+        if (info.maxRun >= 3 && info.openEnds >= 1) open3Count++;
+        if (open3Count >= 2) return true;
     }
 
     return false;
@@ -271,14 +268,6 @@ class MCTSNode {
     }
 }
 
-// ── Transposition Table ─────────────────────────────────────────────────
-
-function stateHash(game: Game, player: Player): string {
-    const pts = game.getPoints();
-    const sorted = pts.map(p => `${p.x},${p.y},${p.player}`).sort();
-    return `${player}:${sorted.join("|")}`;
-}
-
 // ── Killer Move Table ───────────────────────────────────────────────────
 
 class KillerMoveTable {
@@ -323,11 +312,10 @@ const REASON_COLORS: Record<MoveReason, string> = {
 export class InsaneAI implements AI {
     private debugPhases: DebugPhase[] = [];
     private killerTable = new KillerMoveTable();
-    private transpositionTable = new Map<string, number>();
     readonly config: InsaneAIConfig;
-    private workerPool?: MinimaxWorkerPool;
+    private workerPool?: MCTSWorkerPool;
 
-    constructor(config?: Partial<InsaneAIConfig>, workerPool?: MinimaxWorkerPool) {
+    constructor(config?: Partial<InsaneAIConfig>, workerPool?: MCTSWorkerPool) {
         this.config = { ...DEFAULT_INSANE_CONFIG, ...config } as InsaneAIConfig;
         this.workerPool = workerPool;
     }
@@ -336,36 +324,23 @@ export class InsaneAI implements AI {
         return this.debugPhases;
     }
 
-    // ── single candidate evaluation (used by workers) ───────────────────
-
-    evaluateCandidate(
-        game: Game,
-        candidate: { x: number; y: number },
-        player: Player,
-    ): { score: number; immediateWin: boolean } {
-        this.transpositionTable.clear();
-
-        const child = game.clone();
-        if (!child.addMove(candidate.x, candidate.y, player)) {
-            return { score: -Infinity, immediateWin: false };
-        }
-
-        const aiWin = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
-        if (child.getState() === aiWin) {
-            return { score: WIN_SCORE, immediateWin: true };
-        }
-
-        // Root parallelization: run focused MCTS for this one candidate
-        const iterationsPerCandidate = Math.max(1, Math.floor(this.config.maxIterations / Math.max(1, this.config.rootCandidateLimit)));
-        const reward = this.runMCTS(child, player, aiWin, iterationsPerCandidate, WORKER_TIME_LIMIT_MS);
-        return { score: reward * WIN_SCORE, immediateWin: false };
-    }
-
     // ── main move selection ─────────────────────────────────────────────
 
     async getMove(game: Game, player: Player): Promise<ScoredMove> {
+        // Delegate entire MCTS search to worker pool (root parallelization)
+        if (this.workerPool) {
+            const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
+            const result = await this.workerPool.search(gamePoints, player);
+            this.debugPhases = result.debugPhases as DebugPhase[];
+            return {
+                x: result.x,
+                y: result.y,
+                score: result.score,
+                reason: result.reason as MoveReason,
+            };
+        }
+
         this.debugPhases = [];
-        this.transpositionTable.clear();
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);
@@ -412,35 +387,17 @@ export class InsaneAI implements AI {
             lines: [],
         });
 
-        // Evaluate candidates (parallel via workers, or sequential MCTS)
+        // Run full MCTS tree over all candidates
         let bestMove: Candidate | null = null;
         let bestScore = -Infinity;
         const evalResults: Array<{ candidate: Candidate; score: number; detail: string }> = [];
 
-        if (this.workerPool && rootCandidates.length > 1) {
-            // ── Parallel evaluation via worker pool ──────────────────────
-            const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
-            const candidatePositions = rootCandidates.map(c => ({ x: c.x, y: c.y }));
-            const results = await this.workerPool.evaluateCandidates(gamePoints, candidatePositions, player);
-
-            for (let i = 0; i < results.length; i++) {
-                const r = results[i]!;
-                const candidate = rootCandidates[i]!;
-                evalResults.push({ candidate, score: r.score, detail: `s=${r.score.toFixed(0)}` });
-                if (r.score > bestScore) {
-                    bestScore = r.score;
-                    bestMove = candidate;
-                }
-            }
-        } else {
-            // ── Sequential: full MCTS tree over all candidates ──────────
-            const mctsResult = this.runFullMCTS(game, player, aiWin, rootCandidates);
-            for (const r of mctsResult) {
-                evalResults.push(r);
-                if (r.score > bestScore) {
-                    bestScore = r.score;
-                    bestMove = r.candidate;
-                }
+        const mctsResult = this.runFullMCTS(game, player, aiWin, rootCandidates);
+        for (const r of mctsResult) {
+            evalResults.push(r);
+            if (r.score > bestScore) {
+                bestScore = r.score;
+                bestMove = r.candidate;
             }
         }
 
@@ -527,9 +484,12 @@ export class InsaneAI implements AI {
             // Select child for simulation
             let simNode = node;
             if (node.children.length > 0) {
-                const unvisited = node.children.filter(c => c.visits === 0);
-                if (unvisited.length > 0) {
-                    simNode = unvisited[0]!;
+                let firstUnvisited: MCTSNode | null = null;
+                for (const child of node.children) {
+                    if (child.visits === 0) { firstUnvisited = child; break; }
+                }
+                if (firstUnvisited) {
+                    simNode = firstUnvisited;
                 } else {
                     simNode = node.bestChild(this.config.explorationC) ?? node;
                 }
@@ -558,64 +518,6 @@ export class InsaneAI implements AI {
             }
         }
         return results;
-    }
-
-    // ── Focused MCTS (for worker-based per-candidate evaluation) ────────
-
-    private runMCTS(
-        game: Game, aiPlayer: Player, aiWin: GameState,
-        maxIterations: number, timeLimitMs: number,
-    ): number {
-        const opponent: Player = aiPlayer === 0 ? 1 : 0;
-        const root = new MCTSNode(null, opponent, null);
-
-        const startTime = performance.now();
-
-        for (let i = 0; i < maxIterations; i++) {
-            if (i > 0 && i % 500 === 0 && performance.now() - startTime > timeLimitMs) break;
-
-            let node = root;
-            const clonedGame = game.clone();
-
-            // Selection
-            while (node.isExpanded && node.children.length > 0) {
-                const child = node.bestChild(this.config.explorationC);
-                if (!child || !child.move) break;
-                clonedGame.addMove(child.move.x, child.move.y, child.player);
-                node = child;
-            }
-
-            const gs = clonedGame.getState();
-            if (gs !== GameState.ONGOING) {
-                this.backpropagate(node, gs === aiWin ? 1.0 : -1.0);
-                continue;
-            }
-
-            // Expansion
-            if (!node.isExpanded) {
-                const nextPlayer: Player = node.player === 0 ? 1 : 0;
-                const candidates = generateCandidates(clonedGame, nextPlayer, this.config.internalCandidateLimit, this.config);
-                this.expandNodeWith(node, candidates, nextPlayer);
-            }
-
-            let simNode = node;
-            if (node.children.length > 0) {
-                const unvisited = node.children.filter(c => c.visits === 0);
-                if (unvisited.length > 0) {
-                    simNode = unvisited[0]!;
-                } else {
-                    simNode = node.bestChild(this.config.explorationC) ?? node;
-                }
-                if (simNode.move) {
-                    clonedGame.addMove(simNode.move.x, simNode.move.y, simNode.player);
-                }
-            }
-
-            const reward = this.guidedRollout(clonedGame, aiPlayer, aiWin, simNode.player);
-            this.backpropagate(simNode, reward);
-        }
-
-        return root.visits === 0 ? 0 : root.totalReward / root.visits;
     }
 
     // ── MCTS helpers ────────────────────────────────────────────────────
@@ -705,15 +607,9 @@ export class InsaneAI implements AI {
         if (gs === aiWin) return 1.0;
         if (gs !== GameState.ONGOING) return -1.0;
 
-        // Heuristic evaluation with transposition caching
-        const hash = stateHash(rolloutGame, aiPlayer);
-        const cached = this.transpositionTable.get(hash);
-        if (cached !== undefined) return cached;
-
+        // Heuristic evaluation
         const evalScore = this.evaluate(rolloutGame, aiPlayer);
-        const normalized = Math.max(-1, Math.min(1, evalScore / WIN_SCORE));
-        this.transpositionTable.set(hash, normalized);
-        return normalized;
+        return Math.max(-1, Math.min(1, evalScore / WIN_SCORE));
     }
 
     private softmaxSelect(candidates: Candidate[]): Candidate {
