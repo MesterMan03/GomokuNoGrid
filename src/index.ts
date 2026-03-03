@@ -1,14 +1,15 @@
 import { IDEAL_SPACING, SCALE } from "./consts.ts";
 import { Game, GameState, type Player } from "./game.ts";
 import type { AI } from "./ai/types.ts";
-import { DEFAULT_MEDIUM_CONFIG } from "./ai/types.ts";
+import { DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, DEFAULT_INSANE_CONFIG } from "./ai/types.ts";
 import { EasyAI } from "./ai/easy.ts";
 import { MediumAI } from "./ai/medium.ts";
 import { HardAI } from "./ai/hard.ts";
+import { InsaneAI } from "./ai/insane.ts";
 import { DebugDrawer } from "./debug.ts";
 import { Renderer } from "./renderer.ts";
 import { DEFAULT_EVOLUTION_PARAMS, runEvolution, type GameUpdate } from "./ai/evolution.ts";
-import { MinimaxWorkerPool, MatchWorkerPool } from "./ai/worker-pool.ts";
+import { MinimaxWorkerPool, MCTSWorkerPool, MatchWorkerPool } from "./ai/worker-pool.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const modeSelect = document.getElementById("mode-select") as HTMLDivElement;
@@ -18,6 +19,7 @@ let game = new Game();
 let ai: AI | null = null;
 let aiThinking = false;
 let minimaxPool: MinimaxWorkerPool | null = null;
+let mctsPool: MCTSWorkerPool | null = null;
 
 const debugDrawer = new DebugDrawer();
 const renderer = new Renderer(canvas, debugDrawer);
@@ -259,18 +261,32 @@ modeSelect.addEventListener("click", (event) => {
         ai = null;
         minimaxPool?.terminate();
         minimaxPool = null;
+        mctsPool?.terminate();
+        mctsPool = null;
     } else if (mode === "easy") {
         ai = new EasyAI();
         minimaxPool?.terminate();
         minimaxPool = null;
+        mctsPool?.terminate();
+        mctsPool = null;
     } else if (mode === "normal") {
         minimaxPool?.terminate();
-        minimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+        minimaxPool = new MinimaxWorkerPool("normal", DEFAULT_MEDIUM_CONFIG);
+        mctsPool?.terminate();
+        mctsPool = null;
         ai = new MediumAI(undefined, minimaxPool);
     } else if (mode === "hard") {
         minimaxPool?.terminate();
+        minimaxPool = new MinimaxWorkerPool("hard", DEFAULT_HARD_CONFIG);
+        mctsPool?.terminate();
+        mctsPool = null;
+        ai = new HardAI(undefined, minimaxPool);
+    } else if (mode === "insane") {
+        minimaxPool?.terminate();
         minimaxPool = null;
-        ai = new HardAI();
+        mctsPool?.terminate();
+        mctsPool = new MCTSWorkerPool(DEFAULT_INSANE_CONFIG);
+        ai = new InsaneAI(undefined, mctsPool);
     } else if (mode === "aivai") {
         modeSelect.style.display = "none";
         aivaiPanel.style.display = "block";
@@ -316,11 +332,12 @@ function createAIForDifficulty(difficulty: string): AI {
         case "easy": return new EasyAI();
         case "normal": {
             if (!aivaiMinimaxPool) {
-                aivaiMinimaxPool = new MinimaxWorkerPool(DEFAULT_MEDIUM_CONFIG);
+                aivaiMinimaxPool = new MinimaxWorkerPool("normal", DEFAULT_MEDIUM_CONFIG);
             }
             return new MediumAI(undefined, aivaiMinimaxPool);
         }
         case "hard": return new HardAI();
+        case "insane": return new InsaneAI();
         default: return new EasyAI();
     }
 }

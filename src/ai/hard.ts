@@ -1,6 +1,7 @@
 import { type AI, MoveReason, type ScoredMove, type DebugPhase, type HardAIConfig, DEFAULT_HARD_CONFIG } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
+import type { MinimaxWorkerPool } from "./worker-pool.ts";
 
 const WIN_SCORE = 100_000;
 const MAX_NODES = 15_000;
@@ -108,9 +109,11 @@ export class HardAI implements AI {
     private debugPhases: DebugPhase[] = [];
     private nodeCount = 0;
     readonly config: HardAIConfig;
+    private workerPool?: MinimaxWorkerPool;
 
-    constructor(config?: Partial<HardAIConfig>) {
+    constructor(config?: Partial<HardAIConfig>, workerPool?: MinimaxWorkerPool) {
         this.config = { ...DEFAULT_HARD_CONFIG, ...config } as HardAIConfig;
+        this.workerPool = workerPool;
     }
 
     getLastDebugPhases(): DebugPhase[] {
@@ -196,30 +199,48 @@ export class HardAI implements AI {
 
         const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
 
-        for (const candidate of topCandidates) {
-            const child = game.clone();
-            const placed = child.addMove(candidate.x, candidate.y, player);
-            if (!placed) continue;
+        if (this.workerPool && topCandidates.length > 1) {
+            // ── Parallel evaluation via worker pool ──────────────────────
+            const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
+            const candidatePositions = topCandidates.map(c => ({ x: c.x, y: c.y }));
+            const results = await this.workerPool.evaluateCandidates(gamePoints, candidatePositions, player);
 
-            if (child.getState() === aiWinState) {
-                minimaxResults.push({ candidate, score: WIN_SCORE });
-                bestScore = WIN_SCORE;
-                bestMove = candidate;
-                break;
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i]!;
+                const candidate = topCandidates[i]!;
+                minimaxResults.push({ candidate, score: r.score });
+                if (r.score > bestScore) {
+                    bestScore = r.score;
+                    bestMove = candidate;
+                }
             }
+        } else {
+            // ── Sequential evaluation (fallback / single candidate) ─────
+            for (const candidate of topCandidates) {
+                const child = game.clone();
+                const placed = child.addMove(candidate.x, candidate.y, player);
+                if (!placed) continue;
 
-            // Dynamic depth: extend for forced/strong threats
-            let depth = this.config.baseDepth;
-            if (candidate.tier <= ThreatTier.FORCED) depth += 1;
+                if (child.getState() === aiWinState) {
+                    minimaxResults.push({ candidate, score: WIN_SCORE });
+                    bestScore = WIN_SCORE;
+                    bestMove = candidate;
+                    break;
+                }
 
-            depth = Math.min(depth, this.config.maxDepth);
+                // Dynamic depth: extend for forced/strong threats
+                let depth = this.config.baseDepth;
+                if (candidate.tier <= ThreatTier.FORCED) depth += 1;
 
-            const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState);
-            minimaxResults.push({ candidate, score });
+                depth = Math.min(depth, this.config.maxDepth);
 
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove = candidate;
+                const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState);
+                minimaxResults.push({ candidate, score });
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = candidate;
+                }
             }
         }
 
@@ -260,6 +281,29 @@ export class HardAI implements AI {
             score: bestScore,
             reason: bestMove.reason,
         };
+    }
+
+    // ── single candidate evaluation (used by workers and sequential fallback) ──
+
+    evaluateCandidate(
+        game: Game,
+        candidate: { x: number; y: number },
+        player: Player,
+    ): { score: number; immediateWin: boolean } {
+        this.nodeCount = 0;
+
+        const child = game.clone();
+        const placed = child.addMove(candidate.x, candidate.y, player);
+        if (!placed) return { score: -Infinity, immediateWin: false };
+
+        const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+        if (child.getState() === aiWinState) {
+            return { score: WIN_SCORE, immediateWin: true };
+        }
+
+        const depth = Math.min(this.config.baseDepth, this.config.maxDepth);
+        const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState);
+        return { score, immediateWin: score >= WIN_SCORE };
     }
 
     // ── minimax with alpha-beta and selective extensions ─────────────────
