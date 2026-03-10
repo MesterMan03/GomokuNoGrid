@@ -1,17 +1,31 @@
 import { Game } from "./game.ts";
 import { MediumAI } from "./ai/medium.ts";
-import type { MediumAIConfig } from "./ai/types.ts";
+import { HardAI } from "./ai/hard.ts";
+import type { MediumAIConfig, HardAIConfig } from "./ai/types.ts";
 
 /// <reference lib="webworker" />
 export {};
 
-let ai: MediumAI | null = null;
+interface EvaluableAI {
+    evaluateCandidate(
+        game: Game,
+        candidate: { x: number; y: number },
+        player: 0 | 1,
+    ): { score: number; immediateWin: boolean };
+}
+
+let ai: EvaluableAI | null = null;
 
 self.onmessage = (e: MessageEvent) => {
     const msg = e.data;
 
     if (msg.type === "init") {
-        ai = new MediumAI(msg.config as Partial<MediumAIConfig>);
+        const difficulty = msg.difficulty ?? "normal";
+        if (difficulty === "hard") {
+            ai = new HardAI(msg.config as Partial<HardAIConfig>);
+        } else {
+            ai = new MediumAI(msg.config as Partial<MediumAIConfig>);
+        }
     } else if (msg.type === "evaluate") {
         if (!ai) {
             self.postMessage({ type: "error", id: msg.id, message: "AI not initialized" });

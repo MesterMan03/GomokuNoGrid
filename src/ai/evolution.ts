@@ -2,7 +2,8 @@ import { GameState, type Point } from "../game.ts";
 import { EasyAI } from "./easy.ts";
 import { MediumAI } from "./medium.ts";
 import { HardAI } from "./hard.ts";
-import { type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, type EasyAIConfig, type MediumAIConfig, type HardAIConfig } from "./types.ts";
+import { InsaneAI } from "./insane.ts";
+import { type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, DEFAULT_INSANE_CONFIG, type EasyAIConfig, type MediumAIConfig, type HardAIConfig, type InsaneAIConfig } from "./types.ts";
 import { playMatch } from "./match-utils.ts";
 import type { MatchWorkerPool, MatchTask } from "./worker-pool.ts";
 
@@ -20,6 +21,10 @@ const AI_REGISTRY: Record<string, AIDefinition> = {
     hard: {
         defaultConfig: DEFAULT_HARD_CONFIG,
         createAI: (config) => new HardAI(config as Partial<HardAIConfig>),
+    },
+    insane: {
+        defaultConfig: DEFAULT_INSANE_CONFIG,
+        createAI: (config) => new InsaneAI(config as Partial<InsaneAIConfig>),
     },
 };
 

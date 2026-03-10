@@ -117,22 +117,90 @@ export interface HardAIConfig {
 
 export const DEFAULT_HARD_CONFIG: HardAIConfig = {
     lineWeight2: 8.81000035008037,
-    lineWeight3: 690.7686154704872,
-    lineWeight4: 6927.370074552344,
+    lineWeight3: 584.6029944106157,
+    lineWeight4: 7847.080916233621,
     openFactor: 3.933452422563696,
-    opponentBias: 1.7828667896756278,
-    clusteringDecay: 11.648783789799175,
-    clusteringWeight: 3.6871787218774967,
+    opponentBias: 2.0312118704472395,
+    clusteringDecay: 12.387100940574896,
+    clusteringWeight: 3.3064919420686194,
     criticalBlockScore: 390.3643476579421,
-    defensiveBlockScore: 274.32574377869173,
-    offensiveExtensionScore: 87.74356011551403,
-    threatSizeWeight: 17.96402963855924,
-    clusterQuickWeight: 8.55773036520702,
-    maxCandidates: 14,
-    baseDepth: 1.8707001227174642,
-    maxDepth: 3.7111414228486588,
+    defensiveBlockScore: 340.2562647043141,
+    offensiveExtensionScore: 114.37821121982894,
+    threatSizeWeight: 19.475277313373727,
+    clusterQuickWeight: 7.573255522127518,
+    maxCandidates: 15,
+    baseDepth: 2.0730379520103956,
+    maxDepth: 3.602451126858203,
     forkBonus: 584.0185863171791,
-    defensePenalty: 4752.618878313149
+    defensePenalty: 5554.478997888204
+};
+
+/** Configurable weights for the insane AI (MCTS + heuristic hybrid). */
+export interface InsaneAIConfig {
+    [key: string]: number;
+    /** UCB1 exploration constant (lower = more exploitation) */
+    explorationC: number;
+    /** Maximum MCTS iterations */
+    maxIterations: number;
+    /** Root-level candidate limit */
+    rootCandidateLimit: number;
+    /** Internal node candidate limit */
+    internalCandidateLimit: number;
+    /** Guided rollout depth (plies) */
+    rolloutDepth: number;
+    /** Softmax temperature for rollout move selection */
+    rolloutTemperature: number;
+    /** Selective deepening bonus for critical positions */
+    depthExtension: number;
+    /** Maximum search depth (for selective deepening) */
+    maxSearchDepth: number;
+    /** Threat score: open-4 */
+    threatOpen4: number;
+    /** Threat score: double threat (fork) */
+    threatDoubleThreat: number;
+    /** Threat score: open-3 */
+    threatOpen3: number;
+    /** Bonus for fork formations */
+    forkBonus: number;
+    /** Line weight for 2-stone groups */
+    lineWeight2: number;
+    /** Line weight for 3-stone groups */
+    lineWeight3: number;
+    /** Line weight for 4-stone groups */
+    lineWeight4: number;
+    /** Open-end multiplier */
+    openFactor: number;
+    /** Opponent evaluation bias */
+    opponentBias: number;
+    /** Clustering decay */
+    clusteringDecay: number;
+    /** Clustering weight */
+    clusteringWeight: number;
+    /** Defense penalty for opponent open-4 */
+    defensePenalty: number;
+}
+
+export const DEFAULT_INSANE_CONFIG: InsaneAIConfig = {
+    explorationC: 0.3438321493082562,
+    maxIterations: 26250.908108282525,
+    rootCandidateLimit: 8.872023620394874,
+    internalCandidateLimit: 7.017289953972351,
+    rolloutDepth: 8.317687952438682,
+    rolloutTemperature: 0.4103547389693806,
+    depthExtension: 2,
+    maxSearchDepth: 7.445835909252283,
+    threatOpen4: 9342.881064859303,
+    threatDoubleThreat: 2002.1018256359378,
+    threatOpen3: 596.8044364124684,
+    forkBonus: 1365.6973891064354,
+    lineWeight2: 9.088217729596282,
+    lineWeight3: 248.65297042746437,
+    lineWeight4: 2719.142410901761,
+    openFactor: 3.45935999403989,
+    opponentBias: 1.5439876445772607,
+    clusteringDecay: 18.979814984465463,
+    clusteringWeight: 5.144948903040648,
+    defensePenalty: 5269.7397677654435
 };
 
 /** Registry entry for an evolvable AI difficulty. */
