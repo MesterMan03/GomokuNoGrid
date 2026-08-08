@@ -148,7 +148,6 @@ export class Game {
 
     addMove(x: number, y: number, player: Player): Point | null {
         if(this.state !== GameState.ONGOING) {
-            console.debug("Move rejected: game already ended");
             return null;
         }
 
@@ -160,7 +159,6 @@ export class Game {
         const point = { x, y, player } satisfies Point;
         const nearest = [this.tree0.nearest(point, 1), this.tree1.nearest(point, 1)].flat();
         if(nearest.find(([_, dist]) => dist < SYMBOL_RADIUS * 2)) {
-            console.debug("Move rejected: too close to existing move");
             return null;
         }
 
@@ -168,7 +166,6 @@ export class Game {
         // rule 2: closest move must be within MAX_PLACEMENT_DISTANCE
         const sortedDistances = nearest.map(([_, dist]) => dist).sort((a, b) => a - b);
         if(sortedDistances.length > 0 && sortedDistances[0]! > MAX_PLACEMENT_DISTANCE) {
-            console.debug("Move rejected: too far from existing moves");
             return null;
         }
 
@@ -188,7 +185,6 @@ export class Game {
         // check for win condition using line groups
         if(this.findWinningSegment(point.player)) {
             this.state = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
-            console.log(`Player ${player} wins!`);
         }
 
         return point;

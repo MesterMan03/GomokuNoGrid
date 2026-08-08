@@ -129,8 +129,8 @@ export const DEFAULT_HARD_CONFIG: HardAIConfig = {
     threatSizeWeight: 19.475277313373727,
     clusterQuickWeight: 7.573255522127518,
     maxCandidates: 15,
-    baseDepth: 2.0730379520103956,
-    maxDepth: 3.602451126858203,
+    baseDepth: 2,
+    maxDepth: 4,
     forkBonus: 584.0185863171791,
     defensePenalty: 5554.478997888204
 };
@@ -154,6 +154,14 @@ export interface InsaneAIConfig {
     depthExtension: number;
     /** Maximum search depth (for selective deepening) */
     maxSearchDepth: number;
+    /** Per-worker wall-clock search budget in milliseconds */
+    searchTimeMs: number;
+    /** Heuristic score scale used to squash non-terminal rollout rewards */
+    evaluationScale: number;
+    /** Virtual root visits seeded from a shallow deterministic minimax search */
+    minimaxPriorVisits: number;
+    /** Depth of the deterministic root prior search */
+    minimaxPriorDepth: number;
     /** Threat score: open-4 */
     threatOpen4: number;
     /** Threat score: double threat (fork) */
@@ -182,13 +190,17 @@ export interface InsaneAIConfig {
 
 export const DEFAULT_INSANE_CONFIG: InsaneAIConfig = {
     explorationC: 0.3438321493082562,
-    maxIterations: 26250.908108282525,
-    rootCandidateLimit: 8.872023620394874,
-    internalCandidateLimit: 7.017289953972351,
-    rolloutDepth: 8.317687952438682,
+    maxIterations: 26_251,
+    rootCandidateLimit: 9,
+    internalCandidateLimit: 7,
+    rolloutDepth: 8,
     rolloutTemperature: 0.4103547389693806,
     depthExtension: 2,
-    maxSearchDepth: 7.445835909252283,
+    maxSearchDepth: 7,
+    searchTimeMs: 350,
+    evaluationScale: 5_000,
+    minimaxPriorVisits: 128,
+    minimaxPriorDepth: 2,
     threatOpen4: 9342.881064859303,
     threatDoubleThreat: 2002.1018256359378,
     threatOpen3: 596.8044364124684,
@@ -203,9 +215,54 @@ export const DEFAULT_INSANE_CONFIG: InsaneAIConfig = {
     defensePenalty: 5269.7397677654435
 };
 
+function finiteOr(value: number | undefined, fallback: number): number {
+    return Number.isFinite(value) ? value! : fallback;
+}
+
+function integerAtLeast(value: number | undefined, fallback: number, minimum: number): number {
+    return Math.max(minimum, Math.round(finiteOr(value, fallback)));
+}
+
+export function normalizeEasyConfig(config?: Partial<EasyAIConfig>): EasyAIConfig {
+    const merged = { ...DEFAULT_EASY_CONFIG, ...config } as EasyAIConfig;
+    merged.topK = integerAtLeast(merged.topK, DEFAULT_EASY_CONFIG.topK, 1);
+    merged.nearbyRandomCount = integerAtLeast(merged.nearbyRandomCount, DEFAULT_EASY_CONFIG.nearbyRandomCount, 0);
+    return merged;
+}
+
+export function normalizeMediumConfig(config?: Partial<MediumAIConfig>): MediumAIConfig {
+    const merged = { ...DEFAULT_MEDIUM_CONFIG, ...config } as MediumAIConfig;
+    merged.maxCandidates = integerAtLeast(merged.maxCandidates, DEFAULT_MEDIUM_CONFIG.maxCandidates, 1);
+    return merged;
+}
+
+export function normalizeHardConfig(config?: Partial<HardAIConfig>): HardAIConfig {
+    const merged = { ...DEFAULT_HARD_CONFIG, ...config } as HardAIConfig;
+    merged.maxCandidates = integerAtLeast(merged.maxCandidates, DEFAULT_HARD_CONFIG.maxCandidates, 1);
+    merged.baseDepth = integerAtLeast(merged.baseDepth, DEFAULT_HARD_CONFIG.baseDepth, 1);
+    merged.maxDepth = integerAtLeast(merged.maxDepth, DEFAULT_HARD_CONFIG.maxDepth, merged.baseDepth);
+    return merged;
+}
+
+export function normalizeInsaneConfig(config?: Partial<InsaneAIConfig>): InsaneAIConfig {
+    const merged = { ...DEFAULT_INSANE_CONFIG, ...config } as InsaneAIConfig;
+    merged.maxIterations = integerAtLeast(merged.maxIterations, DEFAULT_INSANE_CONFIG.maxIterations, 1);
+    merged.rootCandidateLimit = integerAtLeast(merged.rootCandidateLimit, DEFAULT_INSANE_CONFIG.rootCandidateLimit, 1);
+    merged.internalCandidateLimit = integerAtLeast(merged.internalCandidateLimit, DEFAULT_INSANE_CONFIG.internalCandidateLimit, 1);
+    merged.rolloutDepth = integerAtLeast(merged.rolloutDepth, DEFAULT_INSANE_CONFIG.rolloutDepth, 1);
+    merged.depthExtension = integerAtLeast(merged.depthExtension, DEFAULT_INSANE_CONFIG.depthExtension, 0);
+    merged.maxSearchDepth = integerAtLeast(merged.maxSearchDepth, DEFAULT_INSANE_CONFIG.maxSearchDepth, merged.rolloutDepth);
+    merged.searchTimeMs = Math.max(0, finiteOr(merged.searchTimeMs, DEFAULT_INSANE_CONFIG.searchTimeMs));
+    merged.evaluationScale = Math.max(1, finiteOr(merged.evaluationScale, DEFAULT_INSANE_CONFIG.evaluationScale));
+    merged.minimaxPriorVisits = integerAtLeast(merged.minimaxPriorVisits, DEFAULT_INSANE_CONFIG.minimaxPriorVisits, 0);
+    merged.minimaxPriorDepth = integerAtLeast(merged.minimaxPriorDepth, DEFAULT_INSANE_CONFIG.minimaxPriorDepth, 1);
+    return merged;
+}
+
 /** Registry entry for an evolvable AI difficulty. */
 export interface AIDefinition {
     defaultConfig: Record<string, number>;
+    normalizeConfig(config: Record<string, number>): Record<string, number>;
     createAI(config: Record<string, number>): AI;
 }
 

@@ -1,11 +1,13 @@
-import { type AI, MoveReason, type ScoredMove, type DebugPhase, type InsaneAIConfig, DEFAULT_INSANE_CONFIG } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type InsaneAIConfig, normalizeInsaneConfig } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 import type { MCTSWorkerPool } from "./worker-pool.ts";
+import { type RandomSource, randomIndex, SYSTEM_RANDOM } from "./random.ts";
+import { aggregateMCTSReports, type MCTSRootStat, type MCTSSearchReport, ucb1Score } from "./mcts-result.ts";
+import { HardAI } from "./hard.ts";
 
 const WIN_SCORE = 100_000;
 const CLUSTER_SAMPLE_SIZE = 8;
-const MCTS_TIME_LIMIT_MS = 350;
 
 // ── Line analysis helpers (shared with hard.ts pattern) ─────────────────
 
@@ -140,6 +142,19 @@ function generateCandidates(game: Game, player: Player, limit: number, config: I
     return candidates.slice(0, limit);
 }
 
+function immediateWinningCandidates(
+    game: Game,
+    player: Player,
+    limit: number,
+    config: InsaneAIConfig,
+): Candidate[] {
+    const win = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+    return generateCandidates(game, player, limit, config).filter(candidate => {
+        const child = game.clone();
+        return !!child.addMove(candidate.x, candidate.y, player) && child.getState() === win;
+    });
+}
+
 function addLineExtensionCandidates(
     group: LineGroup,
     candidates: Map<string, Candidate>, config: InsaneAIConfig,
@@ -248,17 +263,15 @@ class MCTSNode {
         return this.visits === 0 ? 0 : this.totalReward / this.visits;
     }
 
-    ucb1(explorationC: number): number {
-        if (this.visits === 0) return Infinity;
-        const parentVisits = this.parent?.visits ?? 1;
-        return this.averageReward + explorationC * Math.sqrt(Math.log(parentVisits) / this.visits);
+    ucb1(explorationC: number, maximizing: boolean): number {
+        return ucb1Score(this.averageReward, this.visits, this.parent?.visits ?? 1, explorationC, maximizing);
     }
 
-    bestChild(explorationC: number): MCTSNode | null {
+    bestChild(explorationC: number, maximizing: boolean): MCTSNode | null {
         let best: MCTSNode | null = null;
         let bestScore = -Infinity;
         for (const child of this.children) {
-            const score = child.ucb1(explorationC);
+            const score = child.ucb1(explorationC, maximizing);
             if (score > bestScore) {
                 bestScore = score;
                 best = child;
@@ -314,10 +327,12 @@ export class InsaneAI implements AI {
     private killerTable = new KillerMoveTable();
     readonly config: InsaneAIConfig;
     private workerPool?: MCTSWorkerPool;
+    private readonly random: RandomSource;
 
-    constructor(config?: Partial<InsaneAIConfig>, workerPool?: MCTSWorkerPool) {
-        this.config = { ...DEFAULT_INSANE_CONFIG, ...config } as InsaneAIConfig;
+    constructor(config?: Partial<InsaneAIConfig>, workerPool?: MCTSWorkerPool, random: RandomSource = SYSTEM_RANDOM) {
+        this.config = normalizeInsaneConfig(config);
         this.workerPool = workerPool;
+        this.random = random;
     }
 
     getLastDebugPhases(): DebugPhase[] {
@@ -331,16 +346,20 @@ export class InsaneAI implements AI {
         if (this.workerPool) {
             const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
             const result = await this.workerPool.search(gamePoints, player);
-            this.debugPhases = result.debugPhases;
-            return {
-                x: result.x,
-                y: result.y,
-                score: result.score,
-                reason: result.reason,
-            };
+            this.debugPhases = this.withSelectedPhase(result.debugPhases, result);
+            return result;
         }
 
-        this.debugPhases = [];
+        const result = aggregateMCTSReports([this.searchRoot(game, player)]);
+        this.debugPhases = this.withSelectedPhase(result.debugPhases, result);
+        return result;
+    }
+
+    /** Run one independent root tree. Workers return this report for aggregation. */
+    searchRoot(game: Game, player: Player): MCTSSearchReport {
+        const searchStarted = performance.now();
+        const debugPhases: DebugPhase[] = [];
+        this.killerTable.clear();
         const opponent: Player = player === 0 ? 1 : 0;
         const aiPoints = game.getPlayerPoints(player);
         const opponentPoints = game.getPlayerPoints(opponent);
@@ -348,15 +367,23 @@ export class InsaneAI implements AI {
         // Special case: AI has no stones yet
         if (aiPoints.length === 0) {
             const move = this.firstMove(game, opponentPoints);
-            return { ...move, score: 0, reason: MoveReason.FALLBACK };
+            return {
+                kind: "fallback",
+                rootStats: [{ ...move, reason: MoveReason.FALLBACK, visits: 1, totalReward: 0 }],
+                debugPhases,
+            };
         }
 
         // Generate root candidates
-        const rootCandidates = generateCandidates(game, player, this.config.rootCandidateLimit, this.config);
+        let rootCandidates = generateCandidates(game, player, this.config.rootCandidateLimit, this.config);
 
         if (rootCandidates.length === 0) {
             const move = this.fallbackMove(game, aiPoints, opponentPoints);
-            return { ...move, score: 0, reason: MoveReason.FALLBACK };
+            return {
+                kind: "fallback",
+                rootStats: [{ ...move, reason: MoveReason.FALLBACK, visits: 1, totalReward: 0 }],
+                debugPhases,
+            };
         }
 
         // Check for immediate win
@@ -364,18 +391,52 @@ export class InsaneAI implements AI {
         for (const cand of rootCandidates) {
             const child = game.clone();
             if (child.addMove(cand.x, cand.y, player) && child.getState() === aiWin) {
-                this.debugPhases.push({
+                debugPhases.push({
                     title: "Immediate Win",
                     description: `Win at (${cand.x.toFixed(1)}, ${cand.y.toFixed(1)})`,
                     markers: [{ x: cand.x, y: cand.y, color: "#ffff00", label: "★ WIN", radius: 10 }],
                     lines: [],
                 });
-                return { x: cand.x, y: cand.y, score: WIN_SCORE, reason: cand.reason };
+                return {
+                    kind: "immediate_win",
+                    rootStats: [{ x: cand.x, y: cand.y, reason: cand.reason, visits: 1, totalReward: 1 }],
+                    debugPhases,
+                };
             }
         }
 
+        // A unique loss in one is not a statistical decision. Resolve it before
+        // spending the MCTS budget so Insane remains tactically reliable.
+        const immediateThreatKeys = new Set(
+            immediateWinningCandidates(game, opponent, this.config.rootCandidateLimit, this.config)
+                .map(candidate => candidateKey(candidate.x, candidate.y)),
+        );
+        const forcedBlock = rootCandidates.find(cand => immediateThreatKeys.has(candidateKey(cand.x, cand.y)));
+        if (forcedBlock) {
+            debugPhases.push({
+                title: "Forced Block",
+                description: `Prevent immediate loss at (${forcedBlock.x.toFixed(1)}, ${forcedBlock.y.toFixed(1)})`,
+                markers: [{ x: forcedBlock.x, y: forcedBlock.y, color: "#ff0000", label: "★ BLOCK", radius: 10 }],
+                lines: [],
+            });
+            return {
+                kind: "forced_move",
+                rootStats: [{ x: forcedBlock.x, y: forcedBlock.y, reason: MoveReason.CRITICAL_BLOCK, visits: 1, totalReward: 0.5 }],
+                debugPhases,
+            };
+        }
+
+        // Do not spend stochastic search budget on a root move that permits a
+        // deterministic win on the opponent's next turn.
+        const safeCandidates = rootCandidates.filter(candidate => {
+            const child = game.clone();
+            if (!child.addMove(candidate.x, candidate.y, player)) return false;
+            return immediateWinningCandidates(child, opponent, this.config.rootCandidateLimit, this.config).length === 0;
+        });
+        if (safeCandidates.length > 0) rootCandidates = safeCandidates;
+
         // Debug phase 1: Root candidates
-        this.debugPhases.push({
+        debugPhases.push({
             title: "Root Candidates",
             description: `${rootCandidates.length} candidates for MCTS`,
             markers: rootCandidates.map((c, i) => ({
@@ -387,57 +448,68 @@ export class InsaneAI implements AI {
             lines: [],
         });
 
-        // Run full MCTS tree over all candidates
-        let bestMove: Candidate | null = null;
-        let bestScore = -Infinity;
-        const evalResults: Array<{ candidate: Candidate; score: number; detail: string }> = [];
-
-        const mctsResult = this.runFullMCTS(game, player, aiWin, rootCandidates);
-        for (const r of mctsResult) {
-            evalResults.push(r);
-            if (r.score > bestScore) {
-                bestScore = r.score;
-                bestMove = r.candidate;
+        const priorRewards = new Map<string, number>();
+        if (this.config.minimaxPriorVisits > 0) {
+            const oracle = new HardAI({
+                baseDepth: this.config.minimaxPriorDepth,
+                maxDepth: this.config.minimaxPriorDepth,
+                maxCandidates: this.config.internalCandidateLimit,
+            }, undefined, this.random);
+            for (const candidate of rootCandidates) {
+                const result = oracle.evaluateCandidate(game, candidate, player, this.config.minimaxPriorDepth);
+                priorRewards.set(candidateKey(candidate.x, candidate.y), Math.tanh(result.score / this.config.evaluationScale));
             }
         }
 
+        const deadline = this.config.searchTimeMs > 0 ? searchStarted + this.config.searchTimeMs : undefined;
+        const rootStats = this.runFullMCTS(game, player, aiWin, rootCandidates, priorRewards, deadline);
+        const best = rootStats.reduce<MCTSRootStat | undefined>((current, stat) => {
+            if (!current || stat.visits > current.visits) return stat;
+            if (stat.visits === current.visits) {
+                const mean = stat.visits === 0 ? -Infinity : stat.totalReward / stat.visits;
+                const currentMean = current.visits === 0 ? -Infinity : current.totalReward / current.visits;
+                if (mean > currentMean) return stat;
+            }
+            return current;
+        }, undefined);
+
         // Debug phase 2: Evaluation results
-        this.debugPhases.push({
+        debugPhases.push({
             title: "MCTS Evaluation",
-            description: `Evaluated ${evalResults.length} moves, best=${bestScore.toFixed(0)}`,
-            markers: evalResults.map(({ candidate: c, score, detail }) => ({
-                x: c.x, y: c.y,
-                color: c === bestMove ? "#ffff00" : REASON_COLORS[c.reason],
-                label: detail,
-                radius: c === bestMove ? 8 : 5,
+            description: `Evaluated ${rootStats.length} root moves; robust child has ${best?.visits ?? 0} visits`,
+            markers: rootStats.map(stat => ({
+                x: stat.x, y: stat.y,
+                color: stat === best ? "#ffff00" : REASON_COLORS[stat.reason],
+                label: `v=${stat.visits} r=${(stat.visits === 0 ? 0 : stat.totalReward / stat.visits).toFixed(2)}`,
+                radius: stat === best ? 8 : 5,
             })),
             lines: [],
         });
 
-        if (!bestMove) {
+        if (!best) {
             const move = this.fallbackMove(game, aiPoints, opponentPoints);
-            return { ...move, score: 0, reason: MoveReason.FALLBACK };
+            return {
+                kind: "fallback",
+                rootStats: [{ ...move, reason: MoveReason.FALLBACK, visits: 1, totalReward: 0 }],
+                debugPhases,
+            };
         }
 
-        // Debug phase 3: Selected move
-        this.debugPhases.push({
+        return { kind: "search", rootStats, debugPhases };
+    }
+
+    private withSelectedPhase(debugPhases: DebugPhase[], move: ScoredMove): DebugPhase[] {
+        return [...debugPhases, {
             title: "Selected Move",
-            description: `(${bestMove.x.toFixed(1)}, ${bestMove.y.toFixed(1)}) score=${bestScore.toFixed(0)} reason=${bestMove.reason}`,
+            description: `(${move.x.toFixed(1)}, ${move.y.toFixed(1)}) score=${move.score.toFixed(0)} reason=${move.reason}`,
             markers: [{
-                x: bestMove.x, y: bestMove.y,
+                x: move.x, y: move.y,
                 color: "#ffff00",
-                label: `★ ${bestScore.toFixed(0)}`,
+                label: `★ ${move.score.toFixed(0)}`,
                 radius: 10,
             }],
             lines: [],
-        });
-
-        return {
-            x: bestMove.x,
-            y: bestMove.y,
-            score: bestScore,
-            reason: bestMove.reason,
-        };
+        }];
     }
 
     // ── Full MCTS tree (sequential, no workers) ─────────────────────────
@@ -445,23 +517,34 @@ export class InsaneAI implements AI {
     private runFullMCTS(
         game: Game, aiPlayer: Player, aiWin: GameState,
         rootCandidates: Candidate[],
-    ): Array<{ candidate: Candidate; score: number; detail: string }> {
+        priorRewards: ReadonlyMap<string, number>,
+        deadline?: number,
+    ): MCTSRootStat[] {
         const opponent: Player = aiPlayer === 0 ? 1 : 0;
         const root = new MCTSNode(null, opponent, null);
         this.expandNodeWith(root, rootCandidates, aiPlayer);
 
+        for (const child of root.children) {
+            if (!child.move) continue;
+            const priorReward = priorRewards.get(candidateKey(child.move.x, child.move.y));
+            if (priorReward === undefined) continue;
+            child.visits = this.config.minimaxPriorVisits;
+            child.totalReward = priorReward * child.visits;
+            root.visits += child.visits;
+            root.totalReward += child.totalReward;
+        }
+
         const maxIter = this.config.maxIterations;
-        const startTime = performance.now();
 
         for (let i = 0; i < maxIter; i++) {
-            if (i > 0 && i % 1000 === 0 && performance.now() - startTime > MCTS_TIME_LIMIT_MS) break;
+            if (deadline !== undefined && i > 0 && i % 32 === 0 && performance.now() >= deadline) break;
 
             // Selection
             let node = root;
             const clonedGame = game.clone();
 
             while (node.isExpanded && node.children.length > 0) {
-                const child = node.bestChild(this.config.explorationC);
+                const child = node.bestChild(this.config.explorationC, node.children[0]!.player === aiPlayer);
                 if (!child || !child.move) break;
                 clonedGame.addMove(child.move.x, child.move.y, child.player);
                 node = child;
@@ -491,7 +574,7 @@ export class InsaneAI implements AI {
                 if (firstUnvisited) {
                     simNode = firstUnvisited;
                 } else {
-                    simNode = node.bestChild(this.config.explorationC) ?? node;
+                    simNode = node.bestChild(this.config.explorationC, node.children[0]!.player === aiPlayer) ?? node;
                 }
                 if (simNode.move) {
                     clonedGame.addMove(simNode.move.x, simNode.move.y, simNode.player);
@@ -506,14 +589,15 @@ export class InsaneAI implements AI {
         }
 
         // Collect results from root children
-        const results: Array<{ candidate: Candidate; score: number; detail: string }> = [];
+        const results: MCTSRootStat[] = [];
         for (const child of root.children) {
             if (child.move) {
-                const score = child.averageReward * WIN_SCORE;
                 results.push({
-                    candidate: child.move,
-                    score,
-                    detail: `v=${child.visits} r=${child.averageReward.toFixed(2)}`,
+                    x: child.move.x,
+                    y: child.move.y,
+                    reason: child.move.reason,
+                    visits: child.visits,
+                    totalReward: child.totalReward,
                 });
             }
         }
@@ -564,7 +648,9 @@ export class InsaneAI implements AI {
     // ── Guided Rollout ──────────────────────────────────────────────────
 
     private guidedRollout(game: Game, aiPlayer: Player, aiWin: GameState, lastPlayer: Player): number {
-        const rolloutGame = game.clone();
+        // The caller creates a fresh simulation state for every iteration, so the
+        // rollout can own and mutate it instead of paying for a second deep clone.
+        const rolloutGame = game;
         let currentPlayer: Player = lastPlayer === 0 ? 1 : 0;
         let depth = this.config.rolloutDepth;
 
@@ -609,7 +695,7 @@ export class InsaneAI implements AI {
 
         // Heuristic evaluation
         const evalScore = this.evaluate(rolloutGame, aiPlayer);
-        return Math.max(-1, Math.min(1, evalScore / WIN_SCORE));
+        return Math.tanh(evalScore / this.config.evaluationScale);
     }
 
     private softmaxSelect(candidates: Candidate[]): Candidate {
@@ -624,7 +710,7 @@ export class InsaneAI implements AI {
 
         if (sumExp <= 0) return candidates[0]!;
 
-        const r = Math.random() * sumExp;
+        const r = this.random.next() * sumExp;
         let cumulative = 0;
         for (let i = 0; i < candidates.length; i++) {
             cumulative += exps[i]!;
@@ -714,9 +800,9 @@ export class InsaneAI implements AI {
     private fallbackMove(game: Game, aiPoints: Point[], opponentPoints: Point[]): { x: number; y: number } {
         const allPoints = [...aiPoints, ...opponentPoints];
         for (let attempt = 0; attempt < 50; attempt++) {
-            const target = allPoints[Math.floor(Math.random() * allPoints.length)]!;
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 15;
+            const target = allPoints[randomIndex(allPoints.length, this.random)]!;
+            const angle = this.random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + this.random.next() * 15;
             const x = target.x / SCALE + Math.cos(angle) * dist;
             const y = target.y / SCALE + Math.sin(angle) * dist;
             if (game.isValidMove(x, y)) return { x, y };

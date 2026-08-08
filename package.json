@@ -16,6 +16,9 @@
   },
   "scripts": {
     "dev": "bun run src/index.html",
-    "build": "rm -rf dist && bun build src/index.html src/minimax.worker.ts src/match.worker.ts src/mcts.worker.ts --outdir=dist --minify --sourcemap=external --splitting"
+    "build": "rm -rf dist && bun build src/index.html src/minimax.worker.ts src/match.worker.ts src/mcts.worker.ts --outdir=dist --minify --sourcemap=external --splitting",
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test",
+    "benchmark:ai": "bun run benchmarks/ai-benchmark.ts"
   }
 }

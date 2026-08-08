@@ -1,7 +1,8 @@
-import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker, type MediumAIConfig, DEFAULT_MEDIUM_CONFIG } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type DebugMarker, type MediumAIConfig, normalizeMediumConfig } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 import type { MinimaxWorkerPool, CandidateResult } from "./worker-pool.ts";
+import { type RandomSource, randomIndex, SYSTEM_RANDOM } from "./random.ts";
 
 const MINIMAX_DEPTH = 2; // root move already simulated → 2 more plies = 3-ply total
 const WIN_SCORE = 100_000;
@@ -29,12 +30,12 @@ export class MediumAI implements AI {
     private debugPhases: DebugPhase[] = [];
     readonly config: MediumAIConfig;
     private workerPool?: MinimaxWorkerPool;
+    private readonly random: RandomSource;
 
-    constructor(config?: Partial<MediumAIConfig>, workerPool?: MinimaxWorkerPool) {
-        // Cast needed: Partial<> with index signature produces number|undefined,
-        // but the spread over defaults guarantees all values are present.
-        this.config = { ...DEFAULT_MEDIUM_CONFIG, ...config } as MediumAIConfig;
+    constructor(config?: Partial<MediumAIConfig>, workerPool?: MinimaxWorkerPool, random: RandomSource = SYSTEM_RANDOM) {
+        this.config = normalizeMediumConfig(config);
         this.workerPool = workerPool;
+        this.random = random;
     }
 
     getLastDebugPhases(): DebugPhase[] {
@@ -495,9 +496,9 @@ export class MediumAI implements AI {
     private fallbackMove(game: Game, aiPoints: Point[], opponentPoints: Point[]): { x: number; y: number } {
         const allPoints = [...aiPoints, ...opponentPoints];
         for (let attempt = 0; attempt < 50; attempt++) {
-            const target = allPoints[Math.floor(Math.random() * allPoints.length)]!;
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 15;
+            const target = allPoints[randomIndex(allPoints.length, this.random)]!;
+            const angle = this.random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + this.random.next() * 15;
             const x = target.x / SCALE + Math.cos(angle) * dist;
             const y = target.y / SCALE + Math.sin(angle) * dist;
             if (game.isValidMove(x, y)) return { x, y };

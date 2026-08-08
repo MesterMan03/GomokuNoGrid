@@ -21,16 +21,11 @@ self.onmessage = async (e: MessageEvent) => {
 
         try {
             const game = Game.fromPoints(msg.points as Array<{ x: number; y: number; player: 0 | 1 }>);
-            const result = await ai.getMove(game, msg.player);
-            const debugPhases = ai.getLastDebugPhases?.() ?? [];
+            const report = ai.searchRoot(game, msg.player);
             self.postMessage({
                 type: "result",
                 id: msg.id,
-                x: result.x,
-                y: result.y,
-                score: result.score,
-                reason: result.reason,
-                debugPhases,
+                report,
             });
         } catch (err) {
             self.postMessage({ type: "error", id: msg.id, message: String(err) });
