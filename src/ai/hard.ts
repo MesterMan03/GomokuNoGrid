@@ -1,6 +1,8 @@
-import { type AI, MoveReason, type ScoredMove, type DebugPhase, type HardAIConfig, DEFAULT_HARD_CONFIG } from "./types.ts";
+import { type AI, MoveReason, type ScoredMove, type DebugPhase, type HardAIConfig, normalizeHardConfig } from "./types.ts";
 import { type Game, GameState, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
+import type { MinimaxWorkerPool } from "./worker-pool.ts";
+import { type RandomSource, randomIndex, SYSTEM_RANDOM } from "./random.ts";
 
 const WIN_SCORE = 100_000;
 const MAX_NODES = 15_000;
@@ -108,9 +110,13 @@ export class HardAI implements AI {
     private debugPhases: DebugPhase[] = [];
     private nodeCount = 0;
     readonly config: HardAIConfig;
+    private workerPool?: MinimaxWorkerPool;
+    private readonly random: RandomSource;
 
-    constructor(config?: Partial<HardAIConfig>) {
-        this.config = { ...DEFAULT_HARD_CONFIG, ...config } as HardAIConfig;
+    constructor(config?: Partial<HardAIConfig>, workerPool?: MinimaxWorkerPool, random: RandomSource = SYSTEM_RANDOM) {
+        this.config = normalizeHardConfig(config);
+        this.workerPool = workerPool;
+        this.random = random;
     }
 
     getLastDebugPhases(): DebugPhase[] {
@@ -196,30 +202,55 @@ export class HardAI implements AI {
 
         const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
 
-        for (const candidate of topCandidates) {
-            const child = game.clone();
-            const placed = child.addMove(candidate.x, candidate.y, player);
-            if (!placed) continue;
+        if (this.workerPool && topCandidates.length > 1) {
+            // ── Parallel evaluation via worker pool ──────────────────────
+            const gamePoints = game.getPoints().map(p => ({ x: p.x, y: p.y, player: p.player }));
+            const candidatePositions = topCandidates.map(c => ({
+                x: c.x,
+                y: c.y,
+                searchDepth: Math.min(
+                    this.config.baseDepth + (c.tier <= ThreatTier.FORCED ? 1 : 0),
+                    this.config.maxDepth,
+                ),
+            }));
+            const results = await this.workerPool.evaluateCandidates(gamePoints, candidatePositions, player);
 
-            if (child.getState() === aiWinState) {
-                minimaxResults.push({ candidate, score: WIN_SCORE });
-                bestScore = WIN_SCORE;
-                bestMove = candidate;
-                break;
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i]!;
+                const candidate = topCandidates[i]!;
+                minimaxResults.push({ candidate, score: r.score });
+                if (r.score > bestScore) {
+                    bestScore = r.score;
+                    bestMove = candidate;
+                }
             }
+        } else {
+            // ── Sequential evaluation (fallback / single candidate) ─────
+            for (const candidate of topCandidates) {
+                const child = game.clone();
+                const placed = child.addMove(candidate.x, candidate.y, player);
+                if (!placed) continue;
 
-            // Dynamic depth: extend for forced/strong threats
-            let depth = this.config.baseDepth;
-            if (candidate.tier <= ThreatTier.FORCED) depth += 1;
+                if (child.getState() === aiWinState) {
+                    minimaxResults.push({ candidate, score: WIN_SCORE });
+                    bestScore = WIN_SCORE;
+                    bestMove = candidate;
+                    break;
+                }
 
-            depth = Math.min(depth, this.config.maxDepth);
+                // Dynamic depth: extend for forced/strong threats
+                let depth = this.config.baseDepth;
+                if (candidate.tier <= ThreatTier.FORCED) depth += 1;
 
-            const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState);
-            minimaxResults.push({ candidate, score });
+                depth = Math.min(depth, this.config.maxDepth);
 
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove = candidate;
+                const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState, 0);
+                minimaxResults.push({ candidate, score });
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = candidate;
+                }
             }
         }
 
@@ -262,6 +293,30 @@ export class HardAI implements AI {
         };
     }
 
+    // ── single candidate evaluation (used by workers and sequential fallback) ──
+
+    evaluateCandidate(
+        game: Game,
+        candidate: { x: number; y: number },
+        player: Player,
+        searchDepth?: number,
+    ): { score: number; immediateWin: boolean } {
+        this.nodeCount = 0;
+
+        const child = game.clone();
+        const placed = child.addMove(candidate.x, candidate.y, player);
+        if (!placed) return { score: -Infinity, immediateWin: false };
+
+        const aiWinState = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+        if (child.getState() === aiWinState) {
+            return { score: WIN_SCORE, immediateWin: true };
+        }
+
+        const depth = searchDepth ?? Math.min(this.config.baseDepth, this.config.maxDepth);
+        const score = this.minimax(child, depth, -Infinity, Infinity, false, player, aiWinState, 0);
+        return { score, immediateWin: score >= WIN_SCORE };
+    }
+
     // ── minimax with alpha-beta and selective extensions ─────────────────
 
     private terminalScore(state: Game, aiWin: GameState): number | null {
@@ -274,9 +329,9 @@ export class HardAI implements AI {
      * Compute the effective depth for a child node, accounting for extensions
      * but never exceeding maxDepth total plies from the root.
      */
-    private extendedDepth(depth: number, ext: number): number {
-        const pliesFromRoot = this.config.baseDepth - depth + 1;
-        return Math.max(0, Math.min(depth - 1 + ext, this.config.maxDepth - pliesFromRoot));
+    private extendedDepth(depth: number, ext: number, ply: number): number {
+        const remainingPlyBudget = this.config.maxDepth - (ply + 1);
+        return Math.max(0, Math.min(depth - 1 + ext, remainingPlyBudget));
     }
 
     private minimax(
@@ -287,6 +342,7 @@ export class HardAI implements AI {
         maximizingPlayer: boolean,
         aiPlayer: Player,
         aiWin: GameState,
+        ply: number,
     ): number {
         this.nodeCount++;
         if (this.nodeCount >= MAX_NODES) return this.evaluate(state, aiPlayer);
@@ -294,7 +350,7 @@ export class HardAI implements AI {
         const terminal = this.terminalScore(state, aiWin);
         if (terminal !== null) return terminal;
 
-        if (depth === 0) {
+        if (depth <= 0 || ply >= this.config.maxDepth) {
             // Quiescence: if position is unstable, continue with forcing moves
             return this.quiescence(state, alpha, beta, maximizingPlayer, aiPlayer, aiWin, 2);
         }
@@ -324,10 +380,10 @@ export class HardAI implements AI {
 
                 // Extension: only for forced-tier moves (no expensive hasActiveThreat check)
                 const ext = move.tier <= ThreatTier.FORCED ? 1 : 0;
-                const childDepth = this.extendedDepth(depth, ext);
+                const childDepth = this.extendedDepth(depth, ext, ply);
 
                 const evalScore = this.terminalScore(child, aiWin)
-                    ?? this.minimax(child, childDepth, alpha, beta, false, aiPlayer, aiWin);
+                    ?? this.minimax(child, childDepth, alpha, beta, false, aiPlayer, aiWin, ply + 1);
 
                 maxEval = Math.max(maxEval, evalScore);
                 alpha = Math.max(alpha, evalScore);
@@ -343,10 +399,10 @@ export class HardAI implements AI {
                 anyExplored = true;
 
                 const ext = move.tier <= ThreatTier.FORCED ? 1 : 0;
-                const childDepth = this.extendedDepth(depth, ext);
+                const childDepth = this.extendedDepth(depth, ext, ply);
 
                 const evalScore = this.terminalScore(child, aiWin)
-                    ?? this.minimax(child, childDepth, alpha, beta, true, aiPlayer, aiWin);
+                    ?? this.minimax(child, childDepth, alpha, beta, true, aiPlayer, aiWin, ply + 1);
 
                 minEval = Math.min(minEval, evalScore);
                 beta = Math.min(beta, evalScore);
@@ -565,7 +621,7 @@ export class HardAI implements AI {
         }
 
         // Small random noise for tie-breaking
-        score += (Math.random() - 0.5) * 2;
+        score += (this.random.next() - 0.5) * 2;
 
         return score;
     }
@@ -690,9 +746,9 @@ export class HardAI implements AI {
     private fallbackMove(game: Game, aiPoints: Point[], opponentPoints: Point[]): { x: number; y: number } {
         const allPoints = [...aiPoints, ...opponentPoints];
         for (let attempt = 0; attempt < 50; attempt++) {
-            const target = allPoints[Math.floor(Math.random() * allPoints.length)]!;
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 15;
+            const target = allPoints[randomIndex(allPoints.length, this.random)]!;
+            const angle = this.random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + this.random.next() * 15;
             const x = target.x / SCALE + Math.cos(angle) * dist;
             const y = target.y / SCALE + Math.sin(angle) * dist;
             if (game.isValidMove(x, y)) return { x, y };

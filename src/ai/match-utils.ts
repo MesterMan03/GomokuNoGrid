@@ -1,6 +1,7 @@
 import { Game, GameState, type Player, type Point } from "../game.ts";
 import { IDEAL_SPACING, SCALE, WIN_D_MAX } from "../consts.ts";
 import type { AI } from "./types.ts";
+import { type RandomSource, randomIndex, SYSTEM_RANDOM } from "./random.ts";
 
 // ── Standalone Position Evaluation ──────────────────────────────────────
 
@@ -56,6 +57,7 @@ export async function playMatch(
     ai1: AI,
     maxMoves: number,
     onUpdate?: (points: Point[], state: GameState) => void,
+    random: RandomSource = SYSTEM_RANDOM,
 ): Promise<number> {
     const game = new Game();
     game.addMove(400, 400, 0);
@@ -70,9 +72,9 @@ export async function playMatch(
             return Math.max(-1, Math.min(1, evaluatePosition(game, 0) / 1000));
         }
         for (let attempt = 0; attempt < 50; attempt++) {
-            const target = points[Math.floor(Math.random() * points.length)]!;
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 15;
+            const target = points[randomIndex(points.length, random)]!;
+            const angle = random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + random.next() * 15;
             const fx = target.x / SCALE + Math.cos(angle) * dist;
             const fy = target.y / SCALE + Math.sin(angle) * dist;
             if (game.addMove(fx, fy, 1)) {
@@ -100,9 +102,9 @@ export async function playMatch(
             let placed = false;
             const points = game.getPoints();
             for (let attempt = 0; attempt < 50; attempt++) {
-                const target = points[Math.floor(Math.random() * points.length)]!;
-                const angle = Math.random() * Math.PI * 2;
-                const dist = IDEAL_SPACING + Math.random() * 15;
+                const target = points[randomIndex(points.length, random)]!;
+                const angle = random.next() * Math.PI * 2;
+                const dist = IDEAL_SPACING + random.next() * 15;
                 const fx = target.x / SCALE + Math.cos(angle) * dist;
                 const fy = target.y / SCALE + Math.sin(angle) * dist;
                 if (game.addMove(fx, fy, currentPlayer)) {

@@ -1,30 +1,21 @@
 import { GameState, type Point } from "../game.ts";
-import { EasyAI } from "./easy.ts";
-import { MediumAI } from "./medium.ts";
-import { HardAI } from "./hard.ts";
-import { type AIDefinition, DEFAULT_EASY_CONFIG, DEFAULT_MEDIUM_CONFIG, DEFAULT_HARD_CONFIG, type EasyAIConfig, type MediumAIConfig, type HardAIConfig } from "./types.ts";
+import { type AIDefinition } from "./types.ts";
 import { playMatch } from "./match-utils.ts";
 import type { MatchWorkerPool, MatchTask } from "./worker-pool.ts";
+import { AI_DIFFICULTIES, createAI, getDefaultAIConfig, isAIDifficulty, normalizeAIConfig, type AIDifficulty } from "./factory.ts";
 
 // ── AI Registry ──────────────────────────────────────────────────────────
 
-const AI_REGISTRY: Record<string, AIDefinition> = {
-    easy: {
-        defaultConfig: DEFAULT_EASY_CONFIG,
-        createAI: (config) => new EasyAI(config as Partial<EasyAIConfig>),
-    },
-    normal: {
-        defaultConfig: DEFAULT_MEDIUM_CONFIG,
-        createAI: (config) => new MediumAI(config as Partial<MediumAIConfig>),
-    },
-    hard: {
-        defaultConfig: DEFAULT_HARD_CONFIG,
-        createAI: (config) => new HardAI(config as Partial<HardAIConfig>),
-    },
-};
+const AI_REGISTRY: Record<AIDifficulty, AIDefinition> = Object.fromEntries(
+    AI_DIFFICULTIES.map(difficulty => [difficulty, {
+        defaultConfig: getDefaultAIConfig(difficulty),
+        normalizeConfig: (config: Record<string, number>) => normalizeAIConfig(difficulty, config),
+        createAI: (config: Record<string, number>) => createAI(difficulty, { config }),
+    }]),
+) as Record<AIDifficulty, AIDefinition>;
 
 export function getAIDefinition(difficulty: string): AIDefinition | undefined {
-    return AI_REGISTRY[difficulty];
+    return isAIDifficulty(difficulty) ? AI_REGISTRY[difficulty] : undefined;
 }
 
 export function getAvailableDifficulties(): string[] {
@@ -147,7 +138,7 @@ export async function runEvolution(
         if (i === 0) {
             population.push({ ...definition.defaultConfig });
         } else {
-            population.push(mutateConfig(definition.defaultConfig, 0.8, params.mutationStrength));
+            population.push(definition.normalizeConfig(mutateConfig(definition.defaultConfig, 0.8, params.mutationStrength)));
         }
     }
 
@@ -261,7 +252,7 @@ export async function runEvolution(
             const parentA = indexed[Math.floor(Math.random() * Math.min(params.eliteCount + 2, indexed.length))]!.cfg;
             const parentB = indexed[Math.floor(Math.random() * indexed.length)]!.cfg;
             const child = crossover(parentA, parentB);
-            nextPop.push(mutateConfig(child, params.mutationRate, params.mutationStrength));
+            nextPop.push(definition.normalizeConfig(mutateConfig(child, params.mutationRate, params.mutationStrength)));
         }
 
         population = nextPop;

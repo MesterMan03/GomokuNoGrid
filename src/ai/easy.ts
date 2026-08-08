@@ -1,6 +1,7 @@
-import { type AI, MoveReason, type ScoredMove, type EasyAIConfig, DEFAULT_EASY_CONFIG } from "./types.ts";
-import type { Game, Player, Point, LineGroup } from "../game.ts";
+import { type AI, MoveReason, type ScoredMove, type EasyAIConfig, normalizeEasyConfig } from "./types.ts";
+import { GameState, type Game, type Player, type Point, type LineGroup } from "../game.ts";
 import { IDEAL_SPACING, SCALE } from "../consts.ts";
+import { type RandomSource, randomIndex, SYSTEM_RANDOM } from "./random.ts";
 
 interface Candidate {
     x: number;
@@ -9,17 +10,19 @@ interface Candidate {
     threatSize: number;
 }
 
+const WIN_SCORE = 100_000;
+
 function candidateKey(x: number, y: number): string {
     return `${Math.round(x * SCALE)},${Math.round(y * SCALE)}`;
 }
 
 export class EasyAI implements AI {
     readonly config: EasyAIConfig;
+    private readonly random: RandomSource;
 
-    constructor(config?: Partial<EasyAIConfig>) {
-        // Cast needed: Partial<> with index signature produces number|undefined,
-        // but the spread over defaults guarantees all values are present.
-        this.config = { ...DEFAULT_EASY_CONFIG, ...config } as EasyAIConfig;
+    constructor(config?: Partial<EasyAIConfig>, random: RandomSource = SYSTEM_RANDOM) {
+        this.config = normalizeEasyConfig(config);
+        this.random = random;
     }
 
     async getMove(game: Game, player: Player): Promise<ScoredMove> {
@@ -55,6 +58,16 @@ export class EasyAI implements AI {
             return { ...move, score: 0, reason: MoveReason.FALLBACK };
         }
 
+        // Difficulty controls move quality, not basic tactical correctness.
+        // Always take a win in one before applying Easy's noisy selection.
+        const aiWin = player === 0 ? GameState.WIN_0 : GameState.WIN_1;
+        for (const candidate of candidates) {
+            const child = game.clone();
+            if (child.addMove(candidate.x, candidate.y, player) && child.getState() === aiWin) {
+                return { x: candidate.x, y: candidate.y, score: WIN_SCORE, reason: candidate.reason };
+            }
+        }
+
         // score candidates
         const scored: ScoredMove[] = candidates.map(c => this.scoreMove(c, aiPoints));
 
@@ -63,7 +76,7 @@ export class EasyAI implements AI {
         if (criticalBlocks.length > 0) {
             criticalBlocks.sort((a, b) => b.score - a.score);
             const topK = criticalBlocks.slice(0, this.config.topK);
-            return topK[Math.floor(Math.random() * topK.length)]!;
+            return topK[randomIndex(topK.length, this.random)]!;
         }
 
         // sort descending by score
@@ -71,7 +84,7 @@ export class EasyAI implements AI {
 
         // pick from top K
         const topK = scored.slice(0, this.config.topK);
-        return topK[Math.floor(Math.random() * topK.length)]!;
+        return topK[randomIndex(topK.length, this.random)]!;
     }
 
     private firstMove(game: Game, opponentPoints: Point[]): { x: number; y: number } {
@@ -79,11 +92,11 @@ export class EasyAI implements AI {
             return { x: 400, y: 400 };
         }
 
-        const target = opponentPoints[Math.floor(Math.random() * opponentPoints.length)]!;
+        const target = opponentPoints[randomIndex(opponentPoints.length, this.random)]!;
 
         for (let i = 0; i < 20; i++) {
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 10;
+            const angle = this.random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + this.random.next() * 10;
             const x = target.x / SCALE + Math.cos(angle) * dist;
             const y = target.y / SCALE + Math.sin(angle) * dist;
             if (game.isValidMove(x, y)) return { x, y };
@@ -162,8 +175,8 @@ export class EasyAI implements AI {
     private addNearbyRandom(aiPoints: Point[], candidates: Map<string, Candidate>): void {
         for (const stone of aiPoints) {
             for (let i = 0; i < this.config.nearbyRandomCount; i++) {
-                const angle = Math.random() * Math.PI * 2;
-                const dist = IDEAL_SPACING + (Math.random() - 0.5) * 10;
+                const angle = this.random.next() * Math.PI * 2;
+                const dist = IDEAL_SPACING + (this.random.next() - 0.5) * 10;
                 const x = stone.x / SCALE + Math.cos(angle) * dist;
                 const y = stone.y / SCALE + Math.sin(angle) * dist;
                 const key = candidateKey(x, y);
@@ -210,7 +223,7 @@ export class EasyAI implements AI {
         }
 
         // random noise
-        score += (Math.random() - 0.5) * 2 * this.config.noiseAmount;
+        score += (this.random.next() - 0.5) * 2 * this.config.noiseAmount;
 
         return {
             x: candidate.x,
@@ -223,9 +236,9 @@ export class EasyAI implements AI {
     private fallbackMove(game: Game, aiPoints: Point[], opponentPoints: Point[]): { x: number; y: number } {
         const allPoints = [...aiPoints, ...opponentPoints];
         for (let attempt = 0; attempt < 50; attempt++) {
-            const target = allPoints[Math.floor(Math.random() * allPoints.length)]!;
-            const angle = Math.random() * Math.PI * 2;
-            const dist = IDEAL_SPACING + Math.random() * 15;
+            const target = allPoints[randomIndex(allPoints.length, this.random)]!;
+            const angle = this.random.next() * Math.PI * 2;
+            const dist = IDEAL_SPACING + this.random.next() * 15;
             const x = target.x / SCALE + Math.cos(angle) * dist;
             const y = target.y / SCALE + Math.sin(angle) * dist;
             if (game.isValidMove(x, y)) return { x, y };

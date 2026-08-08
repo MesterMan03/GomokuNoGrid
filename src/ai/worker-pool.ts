@@ -1,4 +1,14 @@
 import type { GameUpdate } from "./evolution.ts";
+import { aggregateMCTSReports, type AggregatedMCTSResult, type MCTSSearchReport } from "./mcts-result.ts";
+import { WorkerRpcClient } from "./worker-rpc.ts";
+
+const MAX_WORKERS = 8;
+
+function resolveWorkerCount(requested?: number): number {
+    const hardware = navigator.hardwareConcurrency || 4;
+    const count = requested ?? Math.max(1, hardware - 1);
+    return Math.max(1, Math.min(MAX_WORKERS, Math.floor(count)));
+}
 
 // ── Minimax Worker Pool ─────────────────────────────────────────────────
 
@@ -7,36 +17,43 @@ export interface CandidateResult {
     immediateWin: boolean;
 }
 
+export interface CandidateTask {
+    x: number;
+    y: number;
+    /** Optional root depth override used to preserve HardAI's selective extension. */
+    searchDepth?: number;
+}
+
 /**
  * Pool of Web Workers for parallel minimax candidate evaluation.
  * Used by MediumAI during gameplay to evaluate root candidates simultaneously.
  */
 export class MinimaxWorkerPool {
-    private workers: Worker[];
-    private nextId = 0;
+    private workers: WorkerRpcClient[];
 
-    constructor(config: Record<string, number>, numWorkers?: number) {
-        const count = numWorkers ?? Math.min(navigator.hardwareConcurrency || 4, 8);
+    constructor(difficulty: string, config: Record<string, number>, numWorkers?: number) {
+        const count = resolveWorkerCount(numWorkers);
         this.workers = [];
         for (let i = 0; i < count; i++) {
             const w = new Worker(
                 new URL("../minimax.worker.js", import.meta.url),
                 { type: "module" },
             );
-            w.postMessage({ type: "init", config });
-            this.workers.push(w);
+            const client = new WorkerRpcClient(w);
+            client.post({ type: "init", difficulty, config });
+            this.workers.push(client);
         }
     }
 
-    updateConfig(config: Record<string, number>): void {
+    updateConfig(difficulty: string, config: Record<string, number>): void {
         for (const w of this.workers) {
-            w.postMessage({ type: "init", config });
+            w.post({ type: "init", difficulty, config });
         }
     }
 
     async evaluateCandidates(
         gamePoints: Array<{ x: number; y: number; player: 0 | 1 }>,
-        candidates: Array<{ x: number; y: number }>,
+        candidates: CandidateTask[],
         player: 0 | 1,
     ): Promise<CandidateResult[]> {
         if (candidates.length === 0) return [];
@@ -49,9 +66,8 @@ export class MinimaxWorkerPool {
 
         for (let i = 0; i < candidates.length; i++) {
             const workerIndex = i % this.workers.length;
-            const id = this.nextId++;
             promises.push(
-                this.evaluateOne(this.workers[workerIndex]!, id, gamePoints, candidates[i]!, player)
+                this.evaluateOne(this.workers[workerIndex]!, gamePoints, candidates[i]!, player)
                     .then(r => { results[i] = r; }),
             );
         }
@@ -61,49 +77,79 @@ export class MinimaxWorkerPool {
     }
 
     private evaluateOne(
-        worker: Worker,
-        id: number,
+        worker: WorkerRpcClient,
         points: Array<{ x: number; y: number; player: 0 | 1 }>,
-        candidate: { x: number; y: number },
+        candidate: CandidateTask,
         player: 0 | 1,
     ): Promise<CandidateResult> {
-        return new Promise((resolve, reject) => {
-            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        return worker.request<{ score: number; immediateWin: boolean }>({
+            type: "evaluate",
+            points,
+            candidate,
+            player,
+            searchDepth: candidate.searchDepth,
+        }).then(data => ({ score: data.score, immediateWin: data.immediateWin }));
+    }
 
-            const cleanup = () => {
-                worker.removeEventListener("message", messageHandler);
-                worker.removeEventListener("error", errorHandler);
-                clearTimeout(timeoutId);
-            };
+    terminate(): void {
+        for (const w of this.workers) w.terminate();
+        this.workers = [];
+    }
+}
 
-            const messageHandler = (e: MessageEvent) => {
-                const data = e.data;
-                if (!data || data.id !== id) return;
-                if (data.type === "result") {
-                    cleanup();
-                    resolve({ score: data.score, immediateWin: data.immediateWin });
-                } else if (data.type === "error") {
-                    cleanup();
-                    reject(new Error(typeof data.error === "string" ? data.error : "Minimax worker reported an error"));
-                }
-            };
+// ── MCTS Worker Pool ────────────────────────────────────────────────────
 
-            const errorHandler = (event: ErrorEvent) => {
-                cleanup();
-                reject(event.error instanceof Error ? event.error : new Error(event.message || "Minimax worker error"));
-            };
+export type MCTSResult = AggregatedMCTSResult;
 
-            worker.addEventListener("message", messageHandler);
-            worker.addEventListener("error", errorHandler);
+/**
+ * Pool of Web Workers for MCTS-based search.
+ * Uses root parallelization: all workers independently search the same position,
+ * then root visits and rewards are merged before selecting the robust child.
+ */
+export class MCTSWorkerPool {
+    private workers: WorkerRpcClient[];
 
-            // Timeout to prevent indefinite hangs if the worker never responds
-            timeoutId = setTimeout(() => {
-                cleanup();
-                reject(new Error(`Minimax worker timed out for candidate id=${id}`));
-            }, 30_000);
+    constructor(config: Record<string, number>, numWorkers?: number) {
+        const count = resolveWorkerCount(numWorkers);
+        const requestTimeoutMs = Math.max(2_000, (config["searchTimeMs"] ?? 350) * 4);
+        this.workers = [];
+        for (let i = 0; i < count; i++) {
+            const w = new Worker(
+                new URL("../mcts.worker.js", import.meta.url),
+                { type: "module" },
+            );
+            const client = new WorkerRpcClient(w, requestTimeoutMs);
+            client.post({ type: "init", config });
+            this.workers.push(client);
+        }
+    }
 
-            worker.postMessage({ type: "evaluate", id, points, candidate, player });
-        });
+    async search(
+        gamePoints: Array<{ x: number; y: number; player: 0 | 1 }>,
+        player: 0 | 1,
+    ): Promise<MCTSResult> {
+        if (this.workers.length === 0) {
+            throw new Error("No MCTS workers available");
+        }
+
+        // Root parallelization: all workers search the same position independently
+        const promises = this.workers.map(worker => this.searchOne(worker, gamePoints, player));
+        const settled = await Promise.allSettled(promises);
+        const reports = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+        if (reports.length === 0) {
+            const firstFailure = settled.find(result => result.status === "rejected") as PromiseRejectedResult | undefined;
+            throw firstFailure?.reason instanceof Error ? firstFailure.reason : new Error("All MCTS workers failed");
+        }
+        return aggregateMCTSReports(reports);
+    }
+
+    private searchOne(
+        worker: WorkerRpcClient,
+        points: Array<{ x: number; y: number; player: 0 | 1 }>,
+        player: 0 | 1,
+    ): Promise<MCTSSearchReport> {
+        return worker.request<{ report: MCTSSearchReport }>({ type: "search", points, player })
+            .then(data => data.report);
     }
 
     terminate(): void {
@@ -139,7 +185,7 @@ export class MatchWorkerPool {
     private workers: Worker[];
 
     constructor(numWorkers?: number) {
-        const count = numWorkers ?? Math.min(navigator.hardwareConcurrency || 4, 8);
+        const count = resolveWorkerCount(numWorkers);
         this.workers = [];
         for (let i = 0; i < count; i++) {
             this.workers.push(
